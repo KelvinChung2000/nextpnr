@@ -34,66 +34,16 @@ namespace {
 struct FABulousImpl : HimbaechelAPI
 {
 
-    static constexpr int K = 4;
-
     ~FABulousImpl() {};
-    void init_database(Arch *arch) override
-    {
-        init_uarch_constids(arch);
-        arch->load_chipdb("example/chipdb-example.bin");
-        arch->set_speed_grade("DEFAULT");
-    }
 
-    void init(Context *ctx) override
-    {
-        h.init(ctx);
-        HimbaechelAPI::init(ctx);
-    }
+    void init_database(Arch *arch) override;
+    void init(Context *ctx) override;
 
-    void prePlace() override { assign_cell_info(); }
-
-    void pack() override
-    {
-        // Trim nextpnr IOBs - assume IO buffer insertion has been done in synthesis
-        const pool<CellTypePort> top_ports{
-                CellTypePort(id_INBUF, id_PAD),
-                CellTypePort(id_OUTBUF, id_PAD),
-        };
-        h.remove_nextpnr_iobs(top_ports);
-        // Replace constants with LUTs
-        const dict<IdString, Property> vcc_params = {{id_INIT, Property(0xFFFF, 16)}};
-        const dict<IdString, Property> gnd_params = {{id_INIT, Property(0x0000, 16)}};
-        h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC, id_GND);
-        // Constrain directly connected LUTs and FFs together to use dedicated resources
-        int lutffs = h.constrain_cell_pairs(pool<CellTypePort>{{id_LUT4, id_F}}, pool<CellTypePort>{{id_DFF, id_D}}, 1);
-        log_info("Constrained %d LUTFF pairs.\n", lutffs);
-    }
-
-    bool isBelLocationValid(BelId bel, bool explain_invalid) const override
-    {
-        Loc l = ctx->getBelLocation(bel);
-        if (ctx->getBelType(bel).in(id_LUT4, id_DFF)) {
-            return slice_valid(l.x, l.y, l.z / 2);
-        } else {
-            return true;
-        }
-    }
-
-    // Bel bucket functions
-    IdString getBelBucketForCellType(IdString cell_type) const override
-    {
-        if (cell_type.in(id_INBUF, id_OUTBUF))
-            return id_IOB;
-        return cell_type;
-    }
-    bool isValidBelForCellType(IdString cell_type, BelId bel) const override
-    {
-        IdString bel_type = ctx->getBelType(bel);
-        if (bel_type == id_IOB)
-            return cell_type.in(id_INBUF, id_OUTBUF);
-        else
-            return (bel_type == cell_type);
-    }
+    void pack() override;
+    // void prePlace() override;
+    // void postPlace() override;
+    // void preRoute() override;
+    void postRoute() override;
 
   private:
     HimbaechelHelpers h;
@@ -105,36 +55,6 @@ struct FABulousImpl : HimbaechelAPI
         bool lut_i3_used = false;
     };
     std::vector<ExampleCellInfo> fast_cell_info;
-    void assign_cell_info()
-    {
-        fast_cell_info.resize(ctx->cells.size());
-        for (auto &cell : ctx->cells) {
-            CellInfo *ci = cell.second.get();
-            auto &fc = fast_cell_info.at(ci->flat_index);
-            if (ci->type == id_LUT4) {
-                fc.lut_f = ci->getPort(id_F);
-                fc.lut_i3_used = (ci->getPort(ctx->idf("I[%d]", K - 1)) != nullptr);
-            } else if (ci->type == id_DFF) {
-                fc.ff_d = ci->getPort(id_D);
-            }
-        }
-    }
-    bool slice_valid(int x, int y, int z) const
-    {
-        const CellInfo *lut = ctx->getBoundBelCell(ctx->getBelByLocation(Loc(x, y, z * 2)));
-        const CellInfo *ff = ctx->getBoundBelCell(ctx->getBelByLocation(Loc(x, y, z * 2 + 1)));
-        if (!lut || !ff)
-            return true; // always valid if only LUT or FF used
-        const auto &lut_data = fast_cell_info.at(lut->flat_index);
-        const auto &ff_data = fast_cell_info.at(ff->flat_index);
-        // In our example arch; the FF D can either be driven from LUT F or LUT I3
-        // so either; FF D must equal LUT F or LUT I3 must be unused
-        if (ff_data.ff_d == lut_data.lut_f)
-            return true;
-        if (lut_data.lut_i3_used)
-            return false;
-        return true;
-    }
 };
 
 struct FABulousArch : HimbaechelArch
@@ -146,6 +66,53 @@ struct FABulousArch : HimbaechelArch
         return std::make_unique<FABulousImpl>();
     }
 } FABulousArch;
-} // namespace
 
+
+void FABulousImpl::init_database(Arch *arch)
+{
+    init_uarch_constids(arch);
+
+    if (arch->args.chipdb_override.empty()){
+        log_error("FABulous uarch requires a chipdb override to be specified.\n");
+    }
+    arch->load_chipdb("");
+    arch->set_speed_grade("DEFAULT");
+}
+
+void FABulousImpl::init(Context *ctx)
+{
+    const ArchArgs &args = ctx->getArchArgs();
+
+    h.init(ctx);
+    HimbaechelAPI::init(ctx);
+
+    if (args.options.count("cst")){
+        ctx->settings[ctx->id("cst.filename")] = args.options.at("cst");
+    }
+
+}
+
+void FABulousImpl::pack()
+{
+    if (ctx->settings.count(ctx->id("cst.filename"))) {
+        // std::string filename = ctx->settings[ctx->id("cst.filename")].as_string();
+        // std::ifstream in(filename);
+        // if (!in) {
+        //     log_error("failed to open CST file '%s'\n", filename.c_str());
+        // }
+        // if (!gowin_apply_constraints(ctx, in)) {
+        //     log_error("failed to parse CST file '%s'\n", filename.c_str());
+        // }
+    }
+}
+
+void FABulousImpl::postRoute()
+{
+    const ArchArgs &args = ctx->args;
+    if (args.options.count("fasm")) {
+    }
+}
+
+
+} // namespace
 NEXTPNR_NAMESPACE_END
