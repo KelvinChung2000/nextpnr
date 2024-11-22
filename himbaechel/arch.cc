@@ -209,17 +209,7 @@ bool Arch::place()
 {
     bool retVal = false;
     uarch->prePlace();
-    std::string placer = str_or_default(settings, id("placer"), defaultPlacer);
-    if (placer == "heap") {
-        PlacerHeapCfg cfg(getCtx());
-        uarch->configurePlacerHeap(cfg);
-        cfg.ioBufTypes.insert(id("GENERIC_IOB"));
-        retVal = placer_heap(getCtx(), cfg);
-    } else if (placer == "sa") {
-        retVal = placer1(getCtx(), Placer1Cfg(getCtx()));
-    } else {
-        log_error("Himbächel architecture does not support placer '%s'\n", placer.c_str());
-    }
+    retVal = uarch->place();
     uarch->postPlace();
     getCtx()->settings[getCtx()->id("place")] = 1;
     archInfoToAttributes();
@@ -229,17 +219,9 @@ bool Arch::place()
 bool Arch::route()
 {
     set_fast_pip_delays(true);
-    uarch->preRoute();
-    std::string router = str_or_default(settings, id("router"), defaultRouter);
     bool result;
-    if (router == "router1") {
-        result = router1(getCtx(), Router1Cfg(getCtx()));
-    } else if (router == "router2") {
-        router2(getCtx(), Router2Cfg(getCtx()));
-        result = true;
-    } else {
-        log_error("Himbächel architecture does not support router '%s'\n", router.c_str());
-    }
+    uarch->preRoute();
+    result = uarch->route();
     uarch->postRoute();
     getCtx()->settings[getCtx()->id("route")] = 1;
     archInfoToAttributes();
