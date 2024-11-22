@@ -21,6 +21,13 @@
 #include "log.h"
 #include "nextpnr.h"
 
+#include "command.h"
+#include "placer1.h"
+#include "placer_heap.h"
+#include "router1.h"
+#include "router2.h"
+#include "util.h"
+
 NEXTPNR_NAMESPACE_BEGIN
 
 void HimbaechelAPI::init(Context *ctx) { this->ctx = ctx; }
@@ -83,6 +90,41 @@ bool HimbaechelAPI::getClusterPlacement(ClusterId cluster, BelId root_bel,
                                         std::vector<std::pair<CellInfo *, BelId>> &placement) const
 {
     return ctx->BaseArch::getClusterPlacement(cluster, root_bel, placement);
+}
+
+
+
+
+bool HimbaechelAPI::place() 
+{ 
+    bool retVal = false;
+    std::string placer = str_or_default(ctx->settings, ctx->id("placer"), defaultPlacer);
+    if (placer == "heap") {
+        PlacerHeapCfg cfg(ctx);
+        configurePlacerHeap(cfg);
+        cfg.ioBufTypes.insert(ctx->id("GENERIC_IOB"));
+        retVal = placer_heap(ctx, cfg);
+    } else if (placer == "sa") {
+        retVal = placer1(ctx, Placer1Cfg(ctx));
+    } else {
+        log_error("Himbächel architecture does not support placer '%s'\n", placer.c_str());
+    }
+    return retVal;
+}
+
+bool HimbaechelAPI::route() 
+{ 
+    bool result = false;
+    std::string router = str_or_default(ctx->settings, ctx->id("router"), defaultRouter);
+    if (router == "router1") {
+        result = router1(ctx, Router1Cfg(ctx));
+    } else if (router == "router2") {
+        router2(ctx, Router2Cfg(ctx));
+        result = true;
+    } else {
+        log_error("Himbächel architecture does not support router '%s'\n", router.c_str());
+    }
+    return result;
 }
 
 HimbaechelArch *HimbaechelArch::list_head;
