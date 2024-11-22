@@ -26,7 +26,7 @@ struct FABulousImpl : HimbaechelAPI
     void init(Context *ctx) override;
 
     void prePlace() override;
-    // void postPlace() override;
+    void postPlace() override;
     // void preRoute() override;
     void postRoute() override;
 
@@ -121,6 +121,20 @@ bool FABulousImpl::isValidBelForCellType(IdString cell_type, BelId bel) const
 void FABulousImpl::prePlace()
 {
     
+}
+
+void FABulousImpl::postPlace()
+{
+    log_info("================== Final Placement ===================\n");
+    for (auto &cell : ctx->cells) {
+        auto ci = cell.second.get();
+        if (ci->bel != BelId()) {
+            log_info("%s: %s\n", ctx->nameOfBel(ci->bel), ctx->nameOf(ci));
+        } else {
+            log_info("unknown: %s\n", ctx->nameOf(ci));
+        }
+    }
+    log_break();
 }
 
 void FABulousImpl::postRoute()

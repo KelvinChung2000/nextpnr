@@ -67,6 +67,13 @@ struct HimbaechelAPI
     Context *ctx;
     bool with_gui = false;
 
+    const std::string defaultPlacer = "heap";
+
+    const std::vector<std::string> availablePlacers = {"sa", "heap"};
+
+    const std::string defaultRouter = "router1";
+    const std::vector<std::string> availableRouters = {"router1", "router2"};
+
     // --- Bel functions ---
     // Called when a bel is placed/unplaced (with cell=nullptr for a unbind)
     virtual void notifyBelChange(BelId bel, CellInfo *cell) {}
@@ -130,6 +137,10 @@ struct HimbaechelAPI
 
     // For custom placer configuration
     virtual void configurePlacerHeap(PlacerHeapCfg &cfg) {};
+
+    // For custom place flow
+    virtual bool place();
+    virtual bool route();
 
     virtual ~HimbaechelAPI() {};
 };
