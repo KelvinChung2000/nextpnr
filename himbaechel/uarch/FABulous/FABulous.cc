@@ -8,7 +8,9 @@
 
 #define GEN_INIT_CONSTIDS
 #define HIMBAECHEL_CONSTIDS "uarch/FABulous/constids.inc"
+#define HIMBAECHEL_GFXIDS "uarch/example/gfxids.inc"
 #include "himbaechel_constids.h"
+#include "himbaechel_gfxids.h"
 
 
 #include "FABulous.h"
@@ -37,6 +39,12 @@ struct FABulousImpl : HimbaechelAPI
 
     bool isValidBelForCellType(IdString cell_type, BelId bel) const override;
 
+    // drawing
+    void drawBel(std::vector<GraphicElement> &g, GraphicElement::style_t style, IdString bel_type, Loc loc) override;
+    void drawWire(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, IdString wire_type, int32_t tilewire, IdString tile_type) override;
+    void drawPip(std::vector<GraphicElement> &g,GraphicElement::style_t style, Loc loc,
+            WireId src, IdString src_type, int32_t src_id, WireId dst, IdString dst_type, int32_t dst_id) override;
+
   private:
     HimbaechelHelpers h;
     FABulousUtils fu;
@@ -56,7 +64,7 @@ struct FABulousImpl : HimbaechelAPI
 struct FABulousArch : HimbaechelArch
 {
     FABulousArch() : HimbaechelArch("FABulous") {};
-    bool match_device(const std::string &device) override { return true; }
+    bool match_device(const std::string &device) override { return device == "FABulous"; }
     std::unique_ptr<HimbaechelAPI> create(const std::string &device, const dict<std::string, std::string> &args) override
     {
         return std::make_unique<FABulousImpl>();
@@ -142,6 +150,49 @@ void FABulousImpl::postRoute()
     const ArchArgs &args = ctx->args;
     if (args.options.count("fasm")) {
     }
+}
+
+void FABulousImpl::drawBel(std::vector<GraphicElement> &g, GraphicElement::style_t style, IdString bel_type, Loc loc)
+{
+    GraphicElement el;
+    el.type = GraphicElement::TYPE_BOX;
+    el.style = style;
+    el.x1 = loc.x + 0.15;
+    el.x2 = el.x1 + 0.25;
+    el.y1 = loc.y + 0.85 - (loc.z / 2) * 0.1;
+    el.y2 = el.y1 - 0.05;
+    g.push_back(el);
+}
+
+void FABulousImpl::drawWire(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, IdString wire_type, int32_t tilewire, IdString tile_type){
+    GraphicElement el;
+    el.type = GraphicElement::TYPE_LINE;
+    el.style = style;
+    int z;
+    z = (tilewire - 9) / 4;
+    el.x1 = loc.x + 0.10;
+    el.x2 = el.x1 + 0.05;
+    el.y1 = loc.y + 0.85 - z * 0.1  - ((tilewire - GFX_WIRE_L0_I0) % 4 + 1) * 0.01;
+    el.y2 = el.y1;
+    g.push_back(el);
+}
+
+void FABulousImpl::drawPip(std::vector<GraphicElement> &g,GraphicElement::style_t style, Loc loc,
+            WireId src, IdString src_type, int32_t src_id, WireId dst, IdString dst_type, int32_t dst_id)
+{
+    GraphicElement el;
+    el.type = GraphicElement::TYPE_ARROW;
+    el.style = style;
+    int z;
+    // if (src_type == id_LUT_OUT && dst_type == id_FF_DATA) {
+        z = src_id - GFX_WIRE_L0_O;
+        el.x1 = loc.x + 0.45;
+        el.y1 = loc.y + 0.85 - z * 0.1 - 0.025;
+        el.x2 = loc.x + 0.50;
+        el.y2 = el.y1;
+        g.push_back(el);
+
+    // }
 }
 
 

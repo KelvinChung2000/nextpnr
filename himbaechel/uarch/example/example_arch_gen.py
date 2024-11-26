@@ -106,7 +106,7 @@ def create_io_tiletype(chip: Chip):
     for i in range(N_io):
         tt.create_wire(f"IO{i}_T", "IO_T")
         tt.create_wire(f"IO{i}_I", "IO_I")
-        tt.create_wire(f"IO{i}_O", "IO_O")
+        tt.create_wire(f"IO{i}_O", "IO_O")_PAD
         tt.create_wire(f"IO{i}_PAD", "IO_PAD")
         inputs += [f"IO{i}_T", f"IO{i}_I"]
         outputs += [f"IO{i}_O", ]
