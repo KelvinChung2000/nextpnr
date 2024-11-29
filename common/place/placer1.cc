@@ -393,12 +393,14 @@ class SAPlacer
 
         // Final post-placement validity check
         ctx->yield();
+        bool valid = true;
         for (auto bel : ctx->getBels()) {
             CellInfo *cell = ctx->getBoundBelCell(bel);
             if (!ctx->isBelLocationValid(bel, /* explain_invalid */ true)) {
                 std::string cell_text = "no cell";
                 if (cell != nullptr)
                     cell_text = std::string("cell '") + ctx->nameOf(cell) + "'";
+                valid = false;
                 if (ctx->force) {
                     log_warning("post-placement validity check failed for Bel '%s' "
                                 "(%s)\n",
@@ -410,9 +412,9 @@ class SAPlacer
                 }
             }
         }
-        timing_analysis(ctx);
+        // timing_analysis(ctx);
 
-        return true;
+        return valid;
     }
 
   private:

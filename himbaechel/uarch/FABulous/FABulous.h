@@ -14,8 +14,12 @@ NPNR_PACKED_STRUCT(struct Chip_extra_data_POD {
 
 NPNR_PACKED_STRUCT(struct Bel_extra_data_POD {
     int32_t context;
-    int32_t realBelCount;
 });
+
+NPNR_PACKED_STRUCT(struct Tile_extra_data_POD {
+    int32_t uniqueBelCount;
+});
+
 
 
 } // namespace

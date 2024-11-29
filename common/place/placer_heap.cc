@@ -860,21 +860,24 @@ class HeAPPlacer
 
         // At the moment we don't follow the full HeAP algorithm using cuts for legalisation, instead using
         // the simple greedy largest-macro-first approach.
-        std::priority_queue<std::pair<int, IdString>> remaining;
+        std::queue<std::pair<int, IdString>> remaining;
+        ctx->shuffle(solve_cells.begin(), solve_cells.end());
         for (auto cell : solve_cells) {
             remaining.emplace(chain_size[cell->name], cell->name);
         }
+
         int ripup_radius = 2;
         int total_iters = 0;
         int total_iters_noreset = 0;
         while (!remaining.empty()) {
-            auto top = remaining.top();
+            auto top = remaining.front();
             remaining.pop();
 
             CellInfo *ci = ctx->cells.at(top.second).get();
             // Was now placed, ignore
             if (ci->bel != BelId())
                 continue;
+            // log_break();
             // log_info("   Legalising %s (%s) %d\n", top.second.c_str(ctx), ci->type.c_str(ctx), top.first);
             FastBels::FastBelsData *fb;
             fast_bels.getBelsForCellType(ci->type, &fb);
@@ -985,6 +988,7 @@ class HeAPPlacer
 
                 if (ci->cluster == ClusterId()) {
                     // The case where we have no relative constraints
+                    // log_info("      Have no relative constraints\n");
                     for (auto sz : fb->at(nx).at(ny)) {
                         // Look through all bels in this tile; checking region constraint if applicable
                         if (!ci->testRegion(sz))
@@ -1001,13 +1005,17 @@ class HeAPPlacer
                             }
                             // Provisionally bind the bel
                             ctx->bindBel(sz, ci, STRENGTH_WEAK);
+                            // log_info("      tried binding %s to %s\n", ctx->nameOf(ci), ctx->nameOfBel(sz));
                             if (require_validity && !ctx->isBelLocationValid(sz)) {
                                 // New location is not legal; unbind the cell (and rebind the cell we ripped up if
                                 // applicable)
                                 ctx->unbindBel(sz);
+                                // log_info("         Illegal binding\n");
+                                // log_info("         unbinding %s from %s\n",ctx->nameOf(ci), ctx->nameOfBel(sz));
                                 if (bound != nullptr)
                                     ctx->bindBel(sz, bound, STRENGTH_WEAK);
                             } else if (iter_at_radius < need_to_explore) {
+                                // log_info("         Tried not enough but legal\n");
                                 // It's legal, but we haven't tried enough locations yet
                                 ctx->unbindBel(sz);
                                 if (bound != nullptr)
@@ -1040,6 +1048,7 @@ class HeAPPlacer
                                 cell_locs[ci->name].x = loc.x;
                                 cell_locs[ci->name].y = loc.y;
                                 placed = true;
+                                // log_info("         Tried enough and is legal\n\n");
                                 break;
                             }
                         }
