@@ -34,6 +34,44 @@ int FABulousUtils::get_bel_context(BelId bel) const
     return extra->context;
 }
 
+int FABulousUtils::get_tile_north_port_count(int x, int y) const
+{
+    int tile = tile_by_xy(ctx->chip_info, x, y);
+    const TileTypePOD &tile_data = chip_tile_info(ctx->chip_info, tile); 
+    const Tile_extra_data_POD *extra = 
+            reinterpret_cast<const Tile_extra_data_POD *>(tile_data.extra_data.get());
+    return extra->northPortCount;
+}
+
+int FABulousUtils::get_tile_east_port_count(int x, int y) const
+{
+    int tile = tile_by_xy(ctx->chip_info, x, y);
+    const TileTypePOD &tile_data = chip_tile_info(ctx->chip_info, tile); 
+    const Tile_extra_data_POD *extra = 
+            reinterpret_cast<const Tile_extra_data_POD *>(tile_data.extra_data.get());
+    return extra->eastPortCount;
+}
+
+
+int FABulousUtils::get_tile_south_port_count(int x, int y) const
+{
+    int tile = tile_by_xy(ctx->chip_info, x, y);
+    const TileTypePOD &tile_data = chip_tile_info(ctx->chip_info, tile); 
+    const Tile_extra_data_POD *extra = 
+            reinterpret_cast<const Tile_extra_data_POD *>(tile_data.extra_data.get());
+    return extra->southPortCount;
+}
+
+int FABulousUtils::get_tile_west_port_count(int x, int y) const
+{
+    int tile = tile_by_xy(ctx->chip_info, x, y);
+    const TileTypePOD &tile_data = chip_tile_info(ctx->chip_info, tile); 
+    const Tile_extra_data_POD *extra = 
+            reinterpret_cast<const Tile_extra_data_POD *>(tile_data.extra_data.get());
+    return extra->westPortCount;
+}
+
+
 dict<IdString, std::vector<IdString>> FABulousUtils::get_tile_unique_bel_type() const
 {   
     dict<IdString, std::vector<IdString>> result;

@@ -907,6 +907,14 @@ class HeAPPlacer
                               "utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of "
                               "attempts.\n",
                               ctx->nameOf(ci), ci->type.c_str(ctx), total_iters_for_cell);
+                // else{
+                //     placed = true;
+                //     log_warning("Unable to find legal placement for cell '%s' of type '%s' after %d attempts, check "
+                //               "constraints and "
+                //               "utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of "
+                //               "attempts.\n",
+                //               ctx->nameOf(ci), ci->type.c_str(ctx), total_iters_for_cell);
+                // }
 
                 // Determine a search radius around the solver location (which increases over time) that is clamped to
                 // the region constraint for the cell (if applicable)
@@ -1840,6 +1848,10 @@ PlacerHeapCfg::PlacerHeapCfg(Context *ctx)
     timingWeight = ctx->setting<int>("placerHeap/timingWeight");
     parallelRefine = ctx->setting<bool>("placerHeap/parallelRefine", false);
     netShareWeight = ctx->setting<float>("placerHeap/netShareWeight", 0);
+    if (ctx->settings.count(ctx->id("placerHeap/legalisationStrategy")))
+        legalisationStrategy = ctx->settings.at(ctx->id("placerHeap/legalisationStrategy")).as_string();
+    else
+        legalisationStrategy = "largest-marco";
 
     timing_driven = ctx->setting<bool>("timing_driven");
     solverTolerance = 1e-5;
