@@ -64,9 +64,10 @@ struct FABulousImpl : HimbaechelAPI
     bool have_path(WireId srcWire, WireId destWire) const;
     
 
-    int context_count = 0;
+    int context_count = 1;
     int minII = 0;
     int placeTrial = 10;
+    float xUnitSpacing = (0.4 / float(context_count));
     dict<IdString, std::vector<IdString>> tile_unique_bel_type;
     dict<BelId, std::vector<BelId>> sharedResource;
 };
@@ -107,6 +108,7 @@ void FABulousImpl::init(Context *ctx)
         ctx->settings[ctx->id("cst.filename")] = args.options.at("cst");
     }
     context_count = fu.get_context_count();
+    xUnitSpacing = (0.4 / float(context_count));
     if (args.options.count("minII")){
         minII = std::stoi(args.options.at("minII"));
     }
@@ -357,42 +359,86 @@ void FABulousImpl::drawBel(std::vector<GraphicElement> &g, GraphicElement::style
     GraphicElement el;
     el.type = GraphicElement::TYPE_BOX;
     el.style = style;
-    el.x1 = loc.x + 0.15;
-    el.x2 = el.x1 + 0.25;
-    el.y1 = loc.y + 0.85 - loc.z * 0.1;
-    el.y2 = el.y1 - 0.05;
+
+    el.x1 = loc.x + 0.3 + xUnitSpacing * float((loc.z / std::max(1 ,context_count-1)));
+    el.x2 = el.x1 + xUnitSpacing * 0.5;
+
+    IdString tileType = fu.get_tile_type(loc.x, loc.y);
+    int uniqueBelCount = tile_unique_bel_type.at(tileType).size();
+
+    float yUnitSpacing = 0.4 / uniqueBelCount;
+
+    el.y1 = loc.y + 0.3 + (loc.z % uniqueBelCount) * yUnitSpacing;
+    el.y2 = el.y1 + (yUnitSpacing * 0.25);
+
     g.push_back(el);
 }
 
 void FABulousImpl::drawWire(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, IdString wire_type, int32_t tilewire, IdString tile_type){
-    // GraphicElement el;
-    // el.type = GraphicElement::TYPE_LINE;
-    // el.style = style;
-    // int z;
-    // z = (tilewire - 9) / 4;
-    // el.x1 = loc.x + 0.10;
-    // el.x2 = el.x1 + 0.05;
-    // el.y1 = loc.y + 0.85 - z * 0.1  - ((tilewire - GFX_WIRE_L0_I0) % 4 + 1) * 0.01;
-    // el.y2 = el.y1;
-    // g.push_back(el);
+    GraphicElement el;
+    el.type = GraphicElement::TYPE_LINE;
+    el.style = style;
+    int z = tilewire;
+    if (wire_type == ctx->id("NextCycle")){
+        el.x1 = loc.x + 0.1 + xUnitSpacing * float((z / std::max(1 ,context_count-1))) + xUnitSpacing * 0.5;
+        el.x2 = el.x1 + xUnitSpacing * 0.25;
+
+        IdString tileType = fu.get_tile_type(loc.x, loc.y);
+        int uniqueBelCount = tile_unique_bel_type.at(tileType).size();
+        float yUnitSpacing = 0.9 / uniqueBelCount;
+
+        el.y1 = loc.y + 0.1+ (z % uniqueBelCount) * yUnitSpacing + (yUnitSpacing * 0.5);
+        el.y2 = el.y1;
+        // log_info("Drawing NextCycle wire at %f %f %f %f\n", el.x1, el.y1, el.x2, el.y2);
+        g.push_back(el);
+    }
+    else if (wire_type == ctx->id("OutPortNORTH")){
+        float spacing = 0.9 / (float(fu.get_tile_north_port_count(loc.x, loc.y))*context_count);
+        el.x1 = loc.x + 0.05 + spacing * float((z / std::max(1 ,context_count)));
+        el.x2 = el.x1;
+        el.y1 = loc.y + 1.0;
+        el.y2 = el.y1 - 0.05;
+        g.push_back(el);
+
+    }else if (wire_type == ctx->id("OutPortEAST")){
+        float spacing = 0.9 / (float(fu.get_tile_north_port_count(loc.x, loc.y))*context_count);
+        el.x1 = loc.x;
+        el.x2 = el.x1 + 0.05;
+        el.y1 = loc.y + 0.05 + spacing * float((z / std::max(1 ,context_count)));;
+        el.y2 = el.y1;
+        g.push_back(el);
+
+    }else if (wire_type == ctx->id("OutPortSOUTH")){
+        float spacing = 0.9 / (float(fu.get_tile_north_port_count(loc.x, loc.y))*context_count);
+        el.x1 = loc.x + 1.0 - 0.05 - spacing * float((z / std::max(1 ,context_count)));
+        el.x2 = el.x1;
+        el.y1 = loc.y;
+        el.y2 = el.y1 + 0.05;
+        g.push_back(el);
+    }else if (wire_type == ctx->id("OutPortWEST")){
+        float spacing = 0.9 / (float(fu.get_tile_north_port_count(loc.x, loc.y))*context_count);
+        el.x1 = loc.x + 1.0;
+        el.x2 = el.x1 - 0.05;
+        el.y1 = loc.y + 1.0 - 0.05 - spacing * float((z / std::max(1 ,context_count)));;
+        el.y2 = el.y1;
+        g.push_back(el);
+    }
+
 }
 
 void FABulousImpl::drawPip(std::vector<GraphicElement> &g,GraphicElement::style_t style, Loc loc,
             WireId src, IdString src_type, int32_t src_id, WireId dst, IdString dst_type, int32_t dst_id)
 {
-    // GraphicElement el;
-    // el.type = GraphicElement::TYPE_ARROW;
-    // el.style = style;
-    // int z;
-    // // if (src_type == id_LUT_OUT && dst_type == id_FF_DATA) {
-    //     z = src_id - GFX_WIRE_L0_O;
+    GraphicElement el;
+    el.type = GraphicElement::TYPE_ARROW;
+    el.style = style;
+    // if (src_type == ctx->id("NextCycle") && dst_type == ctx->id("NextCycle")) {
     //     el.x1 = loc.x + 0.45;
-    //     el.y1 = loc.y + 0.85 - z * 0.1 - 0.025;
+    //     el.y1 = loc.y + 0.85 - src_id * 0.1 - 0.025;
     //     el.x2 = loc.x + 0.50;
     //     el.y2 = el.y1;
     //     g.push_back(el);
-
-    // // }
+    // }
 }
 
 

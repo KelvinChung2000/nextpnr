@@ -18,6 +18,10 @@ NPNR_PACKED_STRUCT(struct Bel_extra_data_POD {
 
 NPNR_PACKED_STRUCT(struct Tile_extra_data_POD {
     int32_t uniqueBelCount;
+    int32_t northPortCount;
+    int32_t eastPortCount;
+    int32_t southPortCount;
+    int32_t westPortCount;
 });
 
 

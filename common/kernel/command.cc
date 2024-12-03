@@ -389,6 +389,8 @@ po::options_description CommandHandler::getGeneralOptions()
     general.add_options()("placer-heap-cell-placement-timeout", po::value<int>(),
                           "allow placer to attempt up to max(10000, total cells^2 / N) iterations to place a cell (int "
                           "N, default: 8, 0 for no timeout)");
+    general.add_options()("placer-heap-legalisation-strategy", po::value<std::string>(), 
+                          "placer heap legalisation strategy; available: largest-marco, random; default: largest-marco");
 
     general.add_options()("static-dump-density", "write density csv files during placer-static flow");
 
@@ -534,6 +536,9 @@ void CommandHandler::setupContext(Context *ctx)
     if (vm.count("placer-heap-cell-placement-timeout"))
         ctx->settings[ctx->id("placerHeap/cellPlacementTimeout")] =
                 std::to_string(std::max(0, vm["placer-heap-cell-placement-timeout"].as<int>()));
+
+    if (vm.count("placer-heap-legalisation-strategy"))
+        ctx->settings[ctx->id("placerHeap/legalisationStrategy")] = vm["placer-heap-legalisation-strategy"].as<std::string>();
 
     if (vm.count("parallel-refine"))
         ctx->settings[ctx->id("placerHeap/parallelRefine")] = true;
