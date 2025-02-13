@@ -12,7 +12,7 @@
 #include <random>
 
 #define GEN_INIT_CONSTIDS
-#define HIMBAECHEL_CONSTIDS "uarch/FABulous/constids.inc"
+#define HIMBAECHEL_CONSTIDS "uarch/fabulous/constids.inc"
 #define HIMBAECHEL_GFXIDS "uarch/example/gfxids.inc"
 #include "himbaechel_constids.h"
 #include "himbaechel_gfxids.h"
@@ -23,55 +23,6 @@
 #include "router1.h"
 
 NEXTPNR_NAMESPACE_BEGIN
-
-namespace {
-struct FABulousImpl : HimbaechelAPI
-{
-
-    ~FABulousImpl() {};
-
-    void init_database(Arch *arch) override;
-    void init(Context *ctx) override;
-
-    void prePlace() override;
-    void postPlace() override;
-    // void preRoute() override;
-    void postRoute() override;
-
-    bool place() override;
-
-    // Bel bucket functions
-    IdString getBelBucketForCellType(IdString cell_type) const override;
-
-    // BelBucketId getBelBucketForBel(BelId bel) const override;
-
-    bool isValidBelForCellType(IdString cell_type, BelId bel) const override;
-    bool isBelLocationValid(BelId bel, bool explain_invalid = false) const override;
-
-    // drawing
-    void drawBel(std::vector<GraphicElement> &g, GraphicElement::style_t style, IdString bel_type, Loc loc) override;
-    void drawWire(std::vector<GraphicElement> &g, GraphicElement::style_t style, Loc loc, IdString wire_type, int32_t tilewire, IdString tile_type) override;
-    void drawPip(std::vector<GraphicElement> &g,GraphicElement::style_t style, Loc loc,
-            WireId src, IdString src_type, int32_t src_id, WireId dst, IdString dst_type, int32_t dst_id) override;
-
-  private:
-    HimbaechelHelpers h;
-    FABulousUtils fu;
-
-    void assign_cell_info();
-    void assign_net_info();
-    void assign_resource_shared();
-    bool have_path(WireId srcWire, WireId destWire) const;
-    
-
-    int context_count = 1;
-    int minII = 0;
-    int placeTrial = 10;
-    float xUnitSpacing = (0.4 / float(context_count));
-    dict<IdString, std::vector<IdString>> tile_unique_bel_type;
-    dict<BelId, std::vector<BelId>> sharedResource;
-};
-
 
 
 struct FABulousArch : HimbaechelArch
@@ -351,6 +302,7 @@ void FABulousImpl::postRoute()
 {
     const ArchArgs &args = ctx->args;
     if (args.options.count("fasm")) {
+        write_fasm(args.options.at("fasm"));
     }
 }
 
@@ -469,8 +421,5 @@ void FABulousImpl::drawPip(std::vector<GraphicElement> &g,GraphicElement::style_
     // g.push_back(el);
 
 }
-
-
-} // namespace
 
 NEXTPNR_NAMESPACE_END

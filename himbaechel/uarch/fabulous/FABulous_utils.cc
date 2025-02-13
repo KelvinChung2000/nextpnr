@@ -2,7 +2,7 @@
 #include "nextpnr.h"
 #include "util.h"
 
-#define HIMBAECHEL_CONSTIDS "uarch/FABulous/constids.inc"
+#define HIMBAECHEL_CONSTIDS "uarch/fabulous/constids.inc"
 #include "himbaechel_constids.h"
 #include "himbaechel_helpers.h"
 #include "FABulous.h"

@@ -64,7 +64,7 @@ else()
 
 endif()
 
-set(HIMBAECHEL_UARCHES example gowin xilinx ng-ultra gatemate)
+set(HIMBAECHEL_UARCHES example gowin xilinx ng-ultra gatemate fabulous)
 
 set(HIMBAECHEL_UARCH "" CACHE STRING "Microarchitectures for nextpnr-himbaechel build")
 set_property(CACHE HIMBAECHEL_UARCH PROPERTY STRINGS ${HIMBAECHEL_UARCHES})
