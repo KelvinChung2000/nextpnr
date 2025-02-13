@@ -314,7 +314,7 @@ struct ExampleImpl : HimbaechelAPI
         el.type = GraphicElement::TYPE_ARROW;
         el.style = style;
         int z;
-        // if (src_type == id_LUT_OUT && dst_type == id_FF_DATA) {
+        if (src_type == id_LUT_OUT && dst_type == id_FF_DATA) {
             z = src_id - GFX_WIRE_L0_O;
             el.x1 = loc.x + 0.45;
             el.y1 = loc.y + 0.85 - z * 0.1 - 0.025;

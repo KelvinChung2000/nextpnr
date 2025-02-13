@@ -389,8 +389,8 @@ po::options_description CommandHandler::getGeneralOptions()
     general.add_options()("placer-heap-cell-placement-timeout", po::value<int>(),
                           "allow placer to attempt up to max(10000, total cells^2 / N) iterations to place a cell (int "
                           "N, default: 8, 0 for no timeout)");
-    general.add_options()("placer-heap-legalisation-strategy", po::value<std::string>(), 
-                          "placer heap legalisation strategy; available: largest-marco, random; default: largest-marco");
+    general.add_options()("placer-heap-export-init-placement", po::value<std::string>(), 
+                          "writing the heap placer init placement. Mainly for exploration purposes.");
 
     general.add_options()("static-dump-density", "write density csv files during placer-static flow");
 
@@ -540,6 +540,9 @@ void CommandHandler::setupContext(Context *ctx)
     if (vm.count("placer-heap-legalisation-strategy"))
         ctx->settings[ctx->id("placerHeap/legalisationStrategy")] = vm["placer-heap-legalisation-strategy"].as<std::string>();
 
+    if (vm.count("placer-heap-export-init-placement"))
+        ctx->settings[ctx->id("placerHeap/exportInitPlacement")] = vm["placer-heap-export-init-placement"].as<std::string>();
+
     if (vm.count("parallel-refine"))
         ctx->settings[ctx->id("placerHeap/parallelRefine")] = true;
 
@@ -578,6 +581,10 @@ void CommandHandler::setupContext(Context *ctx)
         ctx->settings[ctx->id("placerHeap/beta")] = std::to_string(0.9);
     if (ctx->settings.find(ctx->id("placerHeap/criticalityExponent")) == ctx->settings.end())
         ctx->settings[ctx->id("placerHeap/criticalityExponent")] = std::to_string(2);
+    if (ctx->settings.find(ctx->id("placerHeap/legalisationStrategy")) == ctx->settings.end())
+        ctx->settings[ctx->id("placerHeap/legalisationStrategy")] = std::string("largest-marco");
+    if (ctx->settings.find(ctx->id("placerHeap/exportInitPlacement")) == ctx->settings.end())
+        ctx->settings[ctx->id("placerHeap/exportInitPlacement")] = std::string("");
     if (ctx->settings.find(ctx->id("placerHeap/timingWeight")) == ctx->settings.end())
         ctx->settings[ctx->id("placerHeap/timingWeight")] = std::to_string(10);
 
