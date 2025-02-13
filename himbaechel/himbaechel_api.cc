@@ -127,6 +127,8 @@ bool HimbaechelAPI::route()
     return result;
 }
 
+void HimbaechelAPI::expandBoundingBox(BoundingBox &bb) const { ctx->BaseArch::expandBoundingBox(bb); }
+
 HimbaechelArch *HimbaechelArch::list_head;
 HimbaechelArch::HimbaechelArch(const std::string &name) : name(name)
 {
