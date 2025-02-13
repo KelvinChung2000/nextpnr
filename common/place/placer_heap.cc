@@ -158,6 +158,8 @@ class HeAPPlacer
         build_fast_bels();
         seed_placement();
         update_all_chains();
+        if (cfg.exportInitPlacement != "")
+            write_init_placement(cfg.exportInitPlacement);
         wirelen_t hpwl = total_hpwl();
         log_info("Creating initial analytic placement for %d cells, random placement wirelen = %d.\n",
                  int(place_cells.size()), int(hpwl));
@@ -353,6 +355,9 @@ class HeAPPlacer
             }
         }
 
+        if (cfg.exportInitPlacement != "")
+            write_init_placement(cfg.exportInitPlacement, true, any_bad_placements);
+
         if (any_bad_placements) {
             return false;
         }
@@ -539,6 +544,23 @@ class HeAPPlacer
                 return true;
         }
         return false;
+    }
+
+    void write_init_placement(std::string filename, bool final = false, bool result = false)
+    {
+    
+        std:: ofstream out(filename, std::ios::app);
+        NPNR_ASSERT(out);
+        if (!final){
+            for (auto &cell : ctx->cells) {
+                auto cl = cell_locs[cell.first];
+                auto ci = cell.second.get();
+                out << cl.x << "," << cl.y <<  "," << ci->name.str(ctx) << std::endl;
+            }
+        }
+        else{
+            out << "success," << !result << std::endl;
+        }
     }
 
     // Build up a random initial placement, without regard to legality
@@ -1848,10 +1870,8 @@ PlacerHeapCfg::PlacerHeapCfg(Context *ctx)
     timingWeight = ctx->setting<int>("placerHeap/timingWeight");
     parallelRefine = ctx->setting<bool>("placerHeap/parallelRefine", false);
     netShareWeight = ctx->setting<float>("placerHeap/netShareWeight", 0);
-    if (ctx->settings.count(ctx->id("placerHeap/legalisationStrategy")))
-        legalisationStrategy = ctx->settings.at(ctx->id("placerHeap/legalisationStrategy")).as_string();
-    else
-        legalisationStrategy = "largest-marco";
+    legalisationStrategy = ctx->setting<std::string>("placerHeap/legalisationStrategy");
+    exportInitPlacement = ctx->setting<std::string>("placerHeap/exportInitPlacement");
 
     timing_driven = ctx->setting<bool>("timing_driven");
     solverTolerance = 1e-5;
