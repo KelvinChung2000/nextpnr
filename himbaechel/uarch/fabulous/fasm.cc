@@ -98,18 +98,18 @@ struct FabFasmWriter
 
     void write_cell(const CellInfo *ci)
     {
-        out << stringf("# config for cell '%s'\n", ctx->nameOf(ci)) << std::endl;
-        if (ci->type.in(id_FABULOUS_COMB, id_FABULOUS_FF, id_FABULOUS_LC, id_FABULOUS_MUX2, id_FABULOUS_MUX4,
-                        id_FABULOUS_MUX8))
-            write_logic(ci);
-        else if (ci->type == id_IO_1_bidirectional_frame_config_pass)
-            write_io(ci);
-        else if (ci->type.in(id_InPass4_frame_config, id_OutPass4_frame_config))
-            write_iopass(ci);
-        else
-            write_generic_cell(ci);
-        // TODO: other cell types
-        out << std::endl;
+        // out << stringf("# config for cell '%s'\n", ctx->nameOf(ci)) << std::endl;
+        // if (ci->type.in(id_FABULOUS_COMB, id_FABULOUS_FF, id_FABULOUS_LC, id_FABULOUS_MUX2, id_FABULOUS_MUX4,
+        //                 id_FABULOUS_MUX8))
+        //     write_logic(ci);
+        // else if (ci->type == id_IO_1_bidirectional_frame_config_pass)
+        //     write_io(ci);
+        // else if (ci->type.in(id_InPass4_frame_config, id_OutPass4_frame_config))
+        //     write_iopass(ci);
+        // else
+        //     write_generic_cell(ci);
+        // // TODO: other cell types
+        // out << std::endl;
     }
 
     void write_fasm() {
