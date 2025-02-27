@@ -33,6 +33,8 @@ struct FABulousImpl : HimbaechelAPI
     void init_database(Arch *arch) override;
     void init(Context *ctx) override;
 
+
+    void pack() override;
     void prePlace() override;
     void postPlace() override;
     // void preRoute() override;
