@@ -153,6 +153,10 @@ bool FABulousImpl::isValidBelForCellType(IdString cell_type, BelId bel) const
 
 bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
 {
+    if (context_count == 1)
+        return true;
+
+
     CellInfo *boundedCell = ctx->getBoundBelCell(bel);
     // log_info("         isBelLocationValid for bel %s\n", ctx->nameOfBel(bel));
     if (boundedCell == nullptr){
@@ -225,6 +229,8 @@ void FABulousImpl::pack() {
                 CellTypePort(id_OUTBUF, id_PAD),
         };
     h.remove_nextpnr_iobs(top_ports);
+
+    h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC, id_GND);
 }
 
 void FABulousImpl::prePlace()
