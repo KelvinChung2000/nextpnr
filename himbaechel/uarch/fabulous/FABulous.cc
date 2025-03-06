@@ -1,4 +1,5 @@
 #include <iterator>
+#include <fstream>
 
 #include "himbaechel_api.h"
 #include "log.h"
@@ -58,6 +59,10 @@ void FABulousImpl::init(Context *ctx)
     if (args.options.count("cst")){
         ctx->settings[ctx->id("cst.filename")] = args.options.at("cst");
     }
+    if (args.options.count("constrain-pair")){
+        ctx->settings[ctx->id("constrain-pair")] = args.options.at("constrain-pair");
+    }
+
     context_count = fu.get_context_count();
     xUnitSpacing = (0.4 / float(context_count));
     if (args.options.count("minII")){
@@ -95,7 +100,8 @@ void FABulousImpl::assign_resource_shared()
             for (int i = belContext; i < context_count*minII; i+=minII){
                 if (fu.get_bel_context(tileBel) == i % context_count && 
                     ctx->getBelType(tileBel) == ctx->getBelType(bel) &&
-                    tileBel != bel){
+                    tileBel != bel && 
+                    ctx->getBelName(tileBel) == ctx->getBelName(bel)){
                     if (std::find(sharedBel.begin(), sharedBel.end(), tileBel) == sharedBel.end() )
                         sharedBel.push_back(tileBel);
                 }
@@ -153,48 +159,50 @@ bool FABulousImpl::isValidBelForCellType(IdString cell_type, BelId bel) const
 
 bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
 {
-    if (context_count == 1)
-        return true;
-
-
     CellInfo *boundedCell = ctx->getBoundBelCell(bel);
-    // log_info("         isBelLocationValid for bel %s\n", ctx->nameOfBel(bel));
     if (boundedCell == nullptr){
         return true;
-    }
-
+    }   
+    
     std::vector<bool> foundPaths;
     for (auto p : boundedCell->ports){
         if (p.second.type == PORT_IN || p.second.net == nullptr)
             continue;
         
         NetInfo *outnet = p.second.net;
-        
         for (auto user: outnet->users){
             WireId srcWire = ctx->getNetinfoSourceWire(outnet);
+            if (ctx->getNetinfoSinkWireCount(outnet, user) == 0){
+                log_info("         No sinks wire set for net %s\n", ctx->nameOf(outnet->name));
+                return true;
+            }
             for (auto dstWire : ctx->getNetinfoSinkWires(outnet, user)){
-                foundPaths.push_back(have_path(srcWire, dstWire));
+                bool result = have_path(srcWire, dstWire);
+                log_info("%s -> %s : %d\n", ctx->nameOfWire(srcWire), ctx->nameOfWire(dstWire), result);
+
+                foundPaths.push_back(result);
             }
         }
     }
-
+    log_info("         Found %ld paths for net %s\n", foundPaths.size(), ctx->nameOf(boundedCell->name));
+    
     auto sharedBel = sharedResource.at(bel);
     for (auto b : sharedBel){
         CellInfo *sharedCell = ctx->getBoundBelCell(b);
         if (sharedCell == nullptr){
             continue;
         }
-        // log_info("         Current bel %s sharing with %s(%s)\n", ctx->nameOfBel(bel), ctx->nameOfBel(b), ctx->nameOf(sharedCell));
+        log_info("         Current bel %s sharing with %s(%s)\n", ctx->nameOfBel(bel), ctx->nameOfBel(b), ctx->nameOf(sharedCell));
         return false;
     }
 
-
     for (const auto& elem : foundPaths) {
-        if (!elem){
-            return false;
+        if (elem){
+            return true;
         }
     }
-    return true;
+    log_info("         No valid paths found for bel %s for net %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
+    return false;
 }
 
 bool FABulousImpl::have_path(WireId src, WireId dst) const{
@@ -202,13 +210,12 @@ bool FABulousImpl::have_path(WireId src, WireId dst) const{
     dict<WireId, bool> visited;
     stack.push(src);
     bool foundPath = false;
-    
     while (!stack.empty()){
         WireId currentWire = stack.top();
-        // log_info("Visiting %s\n", ctx->nameOfWire(currentWire));
+        log_info("Visiting %s\n", ctx->nameOfWire(currentWire));
         stack.pop();
         if (currentWire == dst){
-            // log_info("         Found path from %s to %s\n", ctx->nameOfWire(srcWire), ctx->nameOfWire(dstWire));
+            log_info("         Found path from %s to %s\n", ctx->nameOfWire(src), ctx->nameOfWire(dst));
             foundPath = true;
             break;
         }
@@ -220,17 +227,9 @@ bool FABulousImpl::have_path(WireId src, WireId dst) const{
             }
         }
     }
+
+    log_info("         Path from %s to %s: %d\n", ctx->nameOfWire(src), ctx->nameOfWire(dst), foundPath);
     return foundPath;
-}
-
-void FABulousImpl::pack() {
-    const pool<CellTypePort> top_ports{
-                CellTypePort(id_INBUF, id_PAD),
-                CellTypePort(id_OUTBUF, id_PAD),
-        };
-    h.remove_nextpnr_iobs(top_ports);
-
-    h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC, id_GND);
 }
 
 void FABulousImpl::prePlace()
