@@ -20,6 +20,16 @@ void FABulousImpl::pack() {
                 CellTypePort(id_INBUF, id_PAD),
                 CellTypePort(id_OUTBUF, id_PAD),
         };
+    
+    // for (auto &net : ctx->nets){
+    //     auto &n = *net.second;
+    //     log_info("%s\n", n.name.c_str(ctx));
+    //     log_info("  driver: %s\n", n.driver.cell->name.c_str(ctx));
+    //     for (auto &usr : n.users){
+    //         log_info("  user: %s\n", usr.cell->name.c_str(ctx));
+    //     }
+    // }
+
     h.remove_nextpnr_iobs(top_ports);
     h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC, id_GND);
     
@@ -105,14 +115,25 @@ void FABulousImpl::pack() {
                     // log_info("%s, %s\n", sink_cell.c_str(ctx), sink_wire.c_str(ctx));
                 }
 
+                // for (auto &cell : ctx->cells){
+                //     auto &ci = *cell.second;
 
-                int count = h.constrain_cell_pairs(src_ports, sink_ports, delta_z_val, true);
-                log_info("Constrained %d pairs of %s:%s to %s:%s with delta_z=%d\n", 
-                    count, 
-                    src_cell.c_str(ctx), src_port.c_str(), 
-                    sink_cell.c_str(ctx), sink_port.c_str(), 
-                    delta_z_val
-                );
+                //     std::vector<PortInfo> src_ports;
+
+                //     for (auto &port: ci.ports){
+                //         if (port.second.type != PORT_OUT || !port.second.net)
+                //             continue;
+                //         if (!src_ports.count(CellTypePort(ci.type, port.first)))
+                //             continue;
+
+
+
+                //         for (auto &sink_port : sink_ports) {
+
+                //         }
+                        
+                //     }
+                // }
             }
         }
         file.close();

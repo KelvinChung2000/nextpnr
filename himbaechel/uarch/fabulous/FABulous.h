@@ -74,6 +74,10 @@ struct FABulousImpl : HimbaechelAPI
     float xUnitSpacing = (0.4 / float(context_count));
     dict<IdString, std::vector<IdString>> tile_unique_bel_type;
     dict<BelId, std::vector<BelId>> sharedResource;
+    mutable dict<std::pair<WireId, WireId>, bool> pathCache;
+
+
+
 };
 
 
