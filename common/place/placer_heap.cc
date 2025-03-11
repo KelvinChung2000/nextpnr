@@ -276,6 +276,13 @@ class HeAPPlacer
                          iter + 1, (run.size() > 1 ? "ALL" : bucket_name.c_str(ctx)), int(solved_hpwl),
                          int(spread_hpwl), int(legal_hpwl),
                          std::chrono::duration<double>(run_stopt - run_startt).count());
+                
+                // for (auto &cell : ctx->cells) {
+                //     if (cell.second->isPseudo())
+                //         continue;
+                //     if (cell.second->bel != BelId())
+                //         log_info("    %s: %s\n", cell.first.c_str(ctx), ctx->nameOfBel(cell.second->bel));
+                // }
             }
 
             // Update timing weights

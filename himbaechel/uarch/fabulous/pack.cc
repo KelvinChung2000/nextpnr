@@ -15,6 +15,30 @@
 
 NEXTPNR_NAMESPACE_BEGIN
 
+
+void FABulousImpl::remove_undrive_constant(){
+    
+    std::vector<NetInfo> to_remove_net;
+
+    for (auto &net : ctx->nets){
+        auto &ni = *net.second;
+        if (!ni.driver.cell)
+            continue;
+        if (ni.driver.cell->type != ctx->id("const_unit"))
+            continue;
+        for (auto &param : ni.driver.cell->params){
+            if (!param.second.is_fully_def()){
+                to_remove_net.push_back(ni);
+            }
+        } 
+    }
+
+    for (auto &net_name : to_remove_net){
+        ctx->nets.erase(net_name.name);
+    }
+}
+
+
 void FABulousImpl::pack() {
     const pool<CellTypePort> top_ports{
                 CellTypePort(id_INBUF, id_PAD),
@@ -32,7 +56,9 @@ void FABulousImpl::pack() {
 
     h.remove_nextpnr_iobs(top_ports);
     h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC, id_GND);
-    
+    remove_undrive_constant(); 
+
+
     if (ctx->settings.count(ctx->id("constrain-pair"))) {
         std::string filename = ctx->settings[ctx->id("constrain-pair")].as_string();
         log_info("Reading constrain pair file '%s'...\n", filename.c_str());

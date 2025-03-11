@@ -408,7 +408,7 @@ template <typename R> struct BaseArch : ArchAPI<R>
 
     virtual bool isClusterStrict(const CellInfo * /*cell*/) const override { return true; }
 
-    virtual bool getClusterPlacement(ClusterId cluster, BelId root_bel,
+virtual bool getClusterPlacement(ClusterId cluster, BelId root_bel,
                                      std::vector<std::pair<CellInfo *, BelId>> &placement) const override
     {
         CellInfo *root_cell = get_cluster_root(this, cluster);

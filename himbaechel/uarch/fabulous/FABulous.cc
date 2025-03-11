@@ -167,7 +167,7 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
     if (ctx->getBelType(bel) == id_INBUF || ctx->getBelType(bel) == id_OUTBUF){
         return true;
     }
-    
+
     std::vector<bool> foundPaths;
     for (auto p : boundedCell->ports){
         if (p.second.type == PORT_IN || p.second.net == nullptr)
