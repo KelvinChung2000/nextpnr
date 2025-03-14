@@ -159,6 +159,7 @@ bool FABulousImpl::isValidBelForCellType(IdString cell_type, BelId bel) const
 
 bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
 {
+    dict<std::pair<WireId, WireId>, bool> pathCacheExplain;
     CellInfo *boundedCell = ctx->getBoundBelCell(bel);
     if (boundedCell == nullptr){
         return true;
@@ -168,7 +169,7 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         return true;
     }
 
-    std::vector<bool> foundPaths;
+    std::vector<std::pair<std::pair<WireId, WireId>, bool>> foundPaths;
     for (auto p : boundedCell->ports){
         if (p.second.type == PORT_IN || p.second.net == nullptr)
             continue;
@@ -181,11 +182,26 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
                 return true;
             }
             for (auto dstWire : ctx->getNetinfoSinkWires(outnet, user)){
+                auto src_dst = std::make_pair(srcWire, dstWire);
+                if (pathCache.count(src_dst)){
+                    foundPaths.push_back(std::make_pair(src_dst, pathCache.at(src_dst)));
+                    if (explain_invalid){
+                        pathCacheExplain[std::make_pair(srcWire, dstWire)] = pathCache.at(std::make_pair(srcWire, dstWire));
+                    }
+                    continue;
+                }
                 bool result = have_path(srcWire, dstWire);
-                // log_info("%s -> %s : %d\n", ctx->nameOfWire(srcWire), ctx->nameOfWire(dstWire), result);
-                foundPaths.push_back(result);
+                foundPaths.push_back(std::make_pair(src_dst, result));
+                if (explain_invalid){
+                    pathCacheExplain[src_dst] = result;
+                }
             }
         }
+    }
+
+    if (foundPaths.size() == 0){
+        log_info("      No paths found for cell %s using bel %s\n", ctx->nameOf(boundedCell->name), ctx->nameOfBel(bel));
+        return true;
     }
     // log_info("         Found %ld paths for net %s\n", foundPaths.size(), ctx->nameOf(boundedCell->name));
     
@@ -195,16 +211,27 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         if (sharedCell == nullptr){
             continue;
         }
-        log_info("         Current bel %s sharing with %s(%s)\n", ctx->nameOfBel(bel), ctx->nameOfBel(b), ctx->nameOf(sharedCell));
+        if (explain_invalid){
+            log_info("Current bel %s sharing with %s(%s)\n", ctx->nameOfBel(bel), ctx->nameOfBel(b), ctx->nameOf(sharedCell));
+        }
         return false;
     }
 
     for (const auto& elem : foundPaths) {
-        if (elem){
+        if (elem.second){
+            log_info("      Found valid paths for bel %s for cell %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
+            log_info("        src wire: %s\n", ctx->nameOfWire(elem.first.first));
+            log_info("        dest wire: %s\n\n", ctx->nameOfWire(elem.first.second));
             return true;
         }
     }
-    // log_info("         No valid paths found for bel %s for net %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
+    if (explain_invalid){
+        log_info("No valid paths found for bel %s for cell %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
+        for (auto p : pathCacheExplain){
+            log_info("   %s -> %s : %d\n", ctx->nameOfWire(p.first.first), ctx->nameOfWire(p.first.second), p.second);
+        }
+    }
+
     return false;
 }
 
@@ -242,6 +269,14 @@ bool FABulousImpl::have_path(WireId src, WireId dst) const{
 
     // log_info("         Path from %s to %s: %d\n", ctx->nameOfWire(src), ctx->nameOfWire(dst), foundPath);
     return foundPath;
+}
+
+
+bool FABulousImpl::getClusterPlacement(ClusterId cluster, BelId root_bel,
+                                    std::vector<std::pair<CellInfo *, BelId>> &placement) const
+{
+    log_info("      Getting cluster placement for cluster %s for root bel %s\n", ctx->nameOf(cluster), ctx->nameOfBel(root_bel));
+    return HimbaechelAPI::getClusterPlacement(cluster, root_bel, placement);
 }
 
 void FABulousImpl::prePlace()

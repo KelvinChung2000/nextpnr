@@ -49,6 +49,8 @@ struct FABulousImpl : HimbaechelAPI
     
     bool isValidBelForCellType(IdString cell_type, BelId bel) const override;
     bool isBelLocationValid(BelId bel, bool explain_invalid = false) const override;
+    bool getClusterPlacement(ClusterId cluster, BelId root_bel,
+                             std::vector<std::pair<CellInfo *, BelId>> &placement) const override; 
     
     // drawing
     void drawBel(std::vector<GraphicElement> &g, GraphicElement::style_t style, IdString bel_type, Loc loc) override;
@@ -69,10 +71,14 @@ struct FABulousImpl : HimbaechelAPI
                 
         // pack functions 
         void remove_undrive_constant();
+        void fold_bit_const();
+        void remove_fabulous_iob();
+        int get_macro_cell_z(const CellInfo *ci);
+        void rel_constr_cells(CellInfo *a, CellInfo *b, int dz);
 
         int context_count = 1;
         int minII = 0;
-        int placeTrial = 10;
+        int placeTrial = 1;
         float xUnitSpacing = (0.4 / float(context_count));
         dict<IdString, std::vector<IdString>> tile_unique_bel_type;
         dict<BelId, std::vector<BelId>> sharedResource;

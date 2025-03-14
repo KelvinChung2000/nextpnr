@@ -276,13 +276,6 @@ class HeAPPlacer
                          iter + 1, (run.size() > 1 ? "ALL" : bucket_name.c_str(ctx)), int(solved_hpwl),
                          int(spread_hpwl), int(legal_hpwl),
                          std::chrono::duration<double>(run_stopt - run_startt).count());
-                
-                // for (auto &cell : ctx->cells) {
-                //     if (cell.second->isPseudo())
-                //         continue;
-                //     if (cell.second->bel != BelId())
-                //         log_info("    %s: %s\n", cell.first.c_str(ctx), ctx->nameOfBel(cell.second->bel));
-                // }
             }
 
             // Update timing weights
@@ -890,7 +883,7 @@ class HeAPPlacer
         // At the moment we don't follow the full HeAP algorithm using cuts for legalisation, instead using
         // the simple greedy largest-macro-first approach.
         std::queue<std::pair<int, IdString>> remaining;
-        ctx->shuffle(solve_cells.begin(), solve_cells.end());
+        // ctx->shuffle(solve_cells.begin(), solve_cells.end());
         for (auto cell : solve_cells) {
             remaining.emplace(chain_size[cell->name], cell->name);
         }
@@ -930,12 +923,20 @@ class HeAPPlacer
             }
 
             while (!placed) {
-                if (cfg.cell_placement_timeout > 0 && total_iters_for_cell > cfg.cell_placement_timeout)
+                if (cfg.cell_placement_timeout > 0 && total_iters_for_cell > cfg.cell_placement_timeout){
+                    log_info("FAILED TO PLACE CELL %s\n", ci->name.c_str(ctx));
+                    for (auto &cell : ctx->cells) {
+                        if (cell.second->isPseudo())
+                            continue;
+                        if (cell.second->bel != BelId())
+                            log_info("    %s: %s\n", cell.first.c_str(ctx), ctx->nameOfBel(cell.second->bel));
+                    }
                     log_error("Unable to find legal placement for cell '%s' of type '%s' after %d attempts, check "
                               "constraints and "
                               "utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of "
                               "attempts.\n",
                               ctx->nameOf(ci), ci->type.c_str(ctx), total_iters_for_cell);
+                }
                 // else{
                 //     placed = true;
                 //     log_warning("Unable to find legal placement for cell '%s' of type '%s' after %d attempts, check "
@@ -1025,7 +1026,6 @@ class HeAPPlacer
 
                 if (ci->cluster == ClusterId()) {
                     // The case where we have no relative constraints
-                    // log_info("      Have no relative constraints\n");
                     for (auto sz : fb->at(nx).at(ny)) {
                         // Look through all bels in this tile; checking region constraint if applicable
                         if (!ci->testRegion(sz))
@@ -1047,8 +1047,6 @@ class HeAPPlacer
                                 // New location is not legal; unbind the cell (and rebind the cell we ripped up if
                                 // applicable)
                                 ctx->unbindBel(sz);
-                                // log_info("         Illegal binding\n");
-                                // log_info("         unbinding %s from %s\n",ctx->nameOf(ci), ctx->nameOfBel(sz));
                                 if (bound != nullptr)
                                     ctx->bindBel(sz, bound, STRENGTH_WEAK);
                             } else if (iter_at_radius < need_to_explore) {
@@ -1085,7 +1083,6 @@ class HeAPPlacer
                                 cell_locs[ci->name].x = loc.x;
                                 cell_locs[ci->name].y = loc.y;
                                 placed = true;
-                                // log_info("         Tried enough and is legal\n\n");
                                 break;
                             }
                         }
@@ -1097,10 +1094,8 @@ class HeAPPlacer
                         std::vector<std::pair<CellInfo *, BelId>> targets;
                         // List of bels we placed things at; and the cell that was there before if applicable
                         std::vector<std::pair<BelId, CellInfo *>> swaps_made;
-
                         if (!ctx->getClusterPlacement(ci->cluster, sz, targets))
                             continue;
-
                         for (auto &target : targets) {
                             // Check it satisfies the region constraint if applicable
                             if (!target.first->testRegion(target.second))
