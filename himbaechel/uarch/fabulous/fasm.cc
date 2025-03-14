@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <boost/range/adaptor/reversed.hpp>
+#include <boost/regex.hpp>
 #include <fstream>
 
 #include "FABulous.h"
@@ -49,11 +50,14 @@ struct FabFasmWriter
         for (IdString entry : name) {
             if (!result.empty())
                 result += ".";
-            result += entry.str(ctx);
+            // Replace [digit] with __digit in names using regex
+            std::string entryStr = entry.str(ctx);
+            boost::regex bracketPattern("\\[(\\d+)\\]");
+            entryStr = boost::regex_replace(entryStr, bracketPattern, "__$1");
+            result += entryStr;
         }
         return result;
     }
-
 
     void write_routing(NetInfo *net){
         std::vector<PipId> sorted_pips;
@@ -61,55 +65,39 @@ struct FabFasmWriter
             if (w.second.pip != PipId())
                 sorted_pips.push_back(w.second.pip);
         std::sort(sorted_pips.begin(), sorted_pips.end());
-        out << stringf("# routing for net '%s'\n", ctx->nameOf(net)) << std::endl;
+        out << stringf("# routing for net '%s'\n", ctx->nameOf(net));
         for (auto pip : sorted_pips)
             out << format_name(ctx->getPipName(pip)) << std::endl;  
         out << std::endl;
     }
 
-    void write_logic(){
-        // prefix = format_name(ctx->getBelName(lc->bel)) + ".";
-        // if (lc->type.in(id_FABULOUS_LC, id_FABULOUS_COMB)) {
-        //     uint64_t init = depermute_lut(lc);
-        //     unsigned width = 1U << cfg.clb.lut_k;
-        //     write_int_vector(stringf("INIT[%d:0]", width - 1), init, width); // todo lut depermute and thru
-        //     if (bool_or_default(lc->params, id_I0MUX, false))
-        //         add_feature("IOmux"); // typo in FABulous?
-        // }
-        // if (lc->type == id_FABULOUS_LC) {
-        //     write_bool(lc, "FF");
-        // }
-        // if (lc->type.in(id_FABULOUS_LC, id_FABULOUS_FF)) {
-        //     write_bool(lc, "SET_NORESET");
-        //     write_bool(lc, "NEG_CLK");
-        //     write_bool(lc, "NEG_EN");
-        //     write_bool(lc, "NEG_SR");
-        //     write_bool(lc, "ASYNC_SR");
-        // }
-        // if (lc->type.in(id_FABULOUS_MUX4, id_FABULOUS_MUX8)) {
-        //     // TODO: don't hardcode prefix
-        //     out << prefix << "I.c0" << std::endl;
-        // }
-        // if (lc->type == id_FABULOUS_MUX8) {
-        //     // TODO: don't hardcode prefix
-        //     out << prefix << "I.c1" << std::endl;
-        // }
+    // Write a FASM bitvector; optionally inverting the values in the process
+    void write_vector(const std::string &name, const std::vector<bool> &value, bool invert = false)
+    {
+        out << name << " = " << int(value.size()) << "'b";
+        for (auto bit : boost::adaptors::reverse(value))
+            out << ((bit ^ invert) ? '1' : '0');
+        out << std::endl;
+    }
+
+    void write_int_vector(const std::string &name, uint64_t value, int width, bool invert = false)
+    {
+        std::vector<bool> bits(width, false);
+        for (int i = 0; i < width; i++)
+            bits[i] = (value & (1ULL << unsigned(i))) != 0;
+        write_vector(name, bits, invert);
     }
 
     void write_cell(const CellInfo *ci)
     {
-        // out << stringf("# config for cell '%s'\n", ctx->nameOf(ci)) << std::endl;
-        // if (ci->type.in(id_FABULOUS_COMB, id_FABULOUS_FF, id_FABULOUS_LC, id_FABULOUS_MUX2, id_FABULOUS_MUX4,
-        //                 id_FABULOUS_MUX8))
-        //     write_logic(ci);
-        // else if (ci->type == id_IO_1_bidirectional_frame_config_pass)
-        //     write_io(ci);
-        // else if (ci->type.in(id_InPass4_frame_config, id_OutPass4_frame_config))
-        //     write_iopass(ci);
-        // else
-        //     write_generic_cell(ci);
-        // // TODO: other cell types
-        // out << std::endl;
+        out << stringf("# config for cell '%s'", ctx->nameOf(ci)) << std::endl;
+        std::string name = format_name(ctx->getBelName(ci->bel));
+        for (auto &param : ci->params){
+            auto paramN = param.first.str(ctx);
+            auto value = param.second;
+            write_int_vector(name + "." + paramN, value.as_int64(), value.size());
+        }
+        out << std::endl;
     }
 
     void write_fasm() {

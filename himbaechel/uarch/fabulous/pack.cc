@@ -151,15 +151,19 @@ void FABulousImpl::rel_constr_cells(CellInfo *a, CellInfo *b, int dz)
 
     // Check if b is already in a's constraint children, which would create a circular dependency
     if (std::find(a->constr_children.begin(), a->constr_children.end(), b) != a->constr_children.end()) {
+#if 0
         log_info("Skipping constraint: cell %s is already a child of %s\n", 
                  b->name.c_str(ctx), a->name.c_str(ctx));
+#endif
         return;
     }
 
     // Also check for the reverse relationship to prevent circular dependencies
     if (std::find(b->constr_children.begin(), b->constr_children.end(), a) != b->constr_children.end()) {
+#if 0
         log_info("Skipping constraint: cell %s is already a child of %s\n", 
                  a->name.c_str(ctx), b->name.c_str(ctx));
+#endif
         return;
     }
 

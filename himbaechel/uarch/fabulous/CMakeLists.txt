@@ -7,6 +7,7 @@ set(SOURCES
     FABulous_utils.h
     FABulous_utils.cc
     pack.cc
+    drawing.cc
 )
 
 add_nextpnr_himbaechel_microarchitecture(${uarch}

@@ -49,8 +49,6 @@ struct FABulousImpl : HimbaechelAPI
     
     bool isValidBelForCellType(IdString cell_type, BelId bel) const override;
     bool isBelLocationValid(BelId bel, bool explain_invalid = false) const override;
-    bool getClusterPlacement(ClusterId cluster, BelId root_bel,
-                             std::vector<std::pair<CellInfo *, BelId>> &placement) const override; 
     
     // drawing
     void drawBel(std::vector<GraphicElement> &g, GraphicElement::style_t style, IdString bel_type, Loc loc) override;
