@@ -68,6 +68,28 @@ void FABulousImpl::fold_bit_const(){
         ctx->nets.erase(net_name);
 }
 
+void FABulousImpl::fold_clock_drive(){
+    std::vector<IdString> trim_cells;
+    std::vector<IdString> trim_nets;
+    for (auto &net : ctx->nets){
+         auto &ni = *net.second;
+        if (!ni.driver.cell)
+            continue;
+        if (ni.driver.cell->type != ctx->id("CLK_DRV"))
+            continue;
+
+        for (auto &usr : ni.users){
+            usr.cell->disconnectPort(usr.port);
+            usr.cell->params[ctx->id("CLK_DRV")] = Property(1, 1);
+        }
+        trim_cells.push_back(ni.driver.cell->name);
+        trim_nets.push_back(ni.name);
+    }
+    for (IdString cell_name : trim_cells)
+        ctx->cells.erase(cell_name);
+    for (IdString net_name : trim_nets)
+        ctx->nets.erase(net_name);
+}
 
 void FABulousImpl::remove_fabulous_iob(){
 
@@ -216,6 +238,7 @@ void FABulousImpl::pack() {
     remove_fabulous_iob();
     // h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC, id_GND);
     fold_bit_const();
+    fold_clock_drive();
     remove_undrive_constant(); 
     
     

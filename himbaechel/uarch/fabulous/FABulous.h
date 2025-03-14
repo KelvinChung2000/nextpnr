@@ -72,6 +72,7 @@ struct FABulousImpl : HimbaechelAPI
         // pack functions 
         void remove_undrive_constant();
         void fold_bit_const();
+        void fold_clock_drive();
         void remove_fabulous_iob();
         int get_macro_cell_z(const CellInfo *ci);
         void rel_constr_cells(CellInfo *a, CellInfo *b, int dz);
