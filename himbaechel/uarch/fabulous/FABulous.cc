@@ -301,7 +301,7 @@ bool FABulousImpl::place()
             tryCount++;
             std::random_device randDev{};
             std::uniform_int_distribution<uint64_t> distrib{1};
-            ctx->rngstate = distrib(randDev);
+            // ctx->rngstate = distrib(randDev);
         }
         auto run_stopt = std::chrono::high_resolution_clock::now();
         log_info("Heap placer took %d iterations and %.02fs seconds\n", tryCount, std::chrono::duration<double>(run_stopt - run_startt).count());
@@ -324,7 +324,7 @@ bool FABulousImpl::place()
             tryCount++;
             std::random_device randDev{};
             std::uniform_int_distribution<uint64_t> distrib{1};
-            ctx->rngstate = distrib(randDev);
+            // ctx->rngstate = distrib(randDev);
         }
     } else {
         log_error("FABulous uarch does not support placer '%s'\n", placer.c_str());

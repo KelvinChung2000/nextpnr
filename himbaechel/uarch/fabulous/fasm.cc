@@ -23,8 +23,8 @@
 
 #include <algorithm>
 #include <boost/range/adaptor/reversed.hpp>
-#include <boost/regex.hpp>
 #include <fstream>
+#include <regex>
 
 #include "FABulous.h"
 
@@ -50,10 +50,8 @@ struct FabFasmWriter
         for (IdString entry : name) {
             if (!result.empty())
                 result += ".";
-            // Replace [digit] with __digit in names using regex
             std::string entryStr = entry.str(ctx);
-            boost::regex bracketPattern("\\[(\\d+)\\]");
-            entryStr = boost::regex_replace(entryStr, bracketPattern, "__$1");
+            entryStr = std::regex_replace(entryStr, std::regex("\\[(\\d+)\\]"), "__$1");
             result += entryStr;
         }
         return result;
@@ -66,8 +64,10 @@ struct FabFasmWriter
                 sorted_pips.push_back(w.second.pip);
         std::sort(sorted_pips.begin(), sorted_pips.end());
         out << stringf("# routing for net '%s'\n", ctx->nameOf(net));
-        for (auto pip : sorted_pips)
+        for (auto pip : sorted_pips){
+
             out << format_name(ctx->getPipName(pip)) << std::endl;  
+        }
         out << std::endl;
     }
 
