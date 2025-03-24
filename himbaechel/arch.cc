@@ -577,4 +577,10 @@ DecalXY Arch::getGroupDecal(GroupId group) const
     return decalxy;
 }
 
+int Arch::getPipFlags(PipId pip) const
+{
+    auto &pdata = chip_pip_info(chip_info, pip);
+    return pdata.flags;
+}
+
 NEXTPNR_NAMESPACE_END

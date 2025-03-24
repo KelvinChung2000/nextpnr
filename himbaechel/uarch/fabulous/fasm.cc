@@ -33,9 +33,18 @@
 
 NEXTPNR_NAMESPACE_BEGIN
 
+
 namespace {
-struct FabFasmWriter
-{
+    struct FabFasmWriter
+    {
+    
+    enum PipFlags
+    {
+        NORMAL = 0,
+        PSEUDO_PIP_START = 1,
+        PSEUDO_PIP_MID = 2,
+        PSEUDO_PIP_END = 3
+    };
     Context *ctx;
     FABulousImpl *uarch;
     std::ostream &out;
@@ -57,16 +66,43 @@ struct FabFasmWriter
         return result;
     }
 
+    void write_pseudo_pip(PipId pip)
+    {
+        std::vector<PipId> pips;
+        pips.push_back(pip);
+        while (true) {
+            bool found = false;
+            for (auto next_pip : ctx->getPipsDownhill(pips.back())) {
+                if (ctx->getPipFlags(next_pip) == PipFlags::PSEUDO_PIP_MID) {
+                    pips.push_back(next_pip);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                break;
+        }
+        for (auto pip : pips) {
+            if (ctx->getPipFlags(pip) == PipFlags::PSEUDO_PIP_START)
+                out << format_name(ctx->getPipName(pip)) << std::endl;
+        }
+    }
+
     void write_routing(NetInfo *net){
         std::vector<PipId> sorted_pips;
         for (auto &w : net->wires)
             if (w.second.pip != PipId())
                 sorted_pips.push_back(w.second.pip);
+                
         std::sort(sorted_pips.begin(), sorted_pips.end());
         out << stringf("# routing for net '%s'\n", ctx->nameOf(net));
         for (auto pip : sorted_pips){
-
-            out << format_name(ctx->getPipName(pip)) << std::endl;  
+            if (ctx->getPipFlags(pip) == PipFlags::NORMAL)
+                out << format_name(ctx->getPipName(pip)) << std::endl;  
+            else if (ctx->getPipFlags(pip) == PipFlags::PSEUDO_PIP_START)
+                write_pseudo_pip(pip);
+            else
+                continue;
         }
         out << std::endl;
     }

@@ -630,7 +630,7 @@ struct Arch : BaseArch<ArchRanges>
 
     bool checkPipAvailForNet(PipId pip, const NetInfo *net) const override
     {
-        if (!uarch->checkPipAvailForNet(pip, net))
+       if (!uarch->checkPipAvailForNet(pip, net))
             return false;
         return BaseArch::checkPipAvailForNet(pip, net);
     }
@@ -883,6 +883,7 @@ struct Arch : BaseArch<ArchRanges>
     const PadInfoPOD *get_package_pin(IdString pin) const;
     const PadInfoPOD *get_bel_package_pin(BelId bel) const;
     BelId get_package_pin_bel(IdString pin) const;
+    int getPipFlags(PipId pip) const;
 
     // Load capacitance and drive resistance for nodes
     // TODO: does this `dict` hurt routing performance too much?

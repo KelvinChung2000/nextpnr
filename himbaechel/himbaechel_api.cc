@@ -92,9 +92,6 @@ bool HimbaechelAPI::getClusterPlacement(ClusterId cluster, BelId root_bel,
     return ctx->BaseArch::getClusterPlacement(cluster, root_bel, placement);
 }
 
-
-
-
 bool HimbaechelAPI::place() 
 { 
     bool retVal = false;
@@ -160,4 +157,5 @@ HimbaechelArch *HimbaechelArch::find_match(const std::string &device)
     }
     return nullptr;
 }
+
 NEXTPNR_NAMESPACE_END
