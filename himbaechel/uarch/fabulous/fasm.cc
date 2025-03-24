@@ -66,26 +66,21 @@ namespace {
         return result;
     }
 
-    void write_pseudo_pip(PipId pip)
+    void write_pseudo_pip(NetInfo *net, PipId pip)
     {
-        std::vector<PipId> pips;
-        pips.push_back(pip);
+        IdStringList dstName = ctx->getPipName(pip);
+        auto last_pip = pip;
+        out << "# pip end: " << format_name(ctx->getPipName(last_pip)) << "'\n";
         while (true) {
-            bool found = false;
-            for (auto next_pip : ctx->getPipsDownhill(pips.back())) {
-                if (ctx->getPipFlags(next_pip) == PipFlags::PSEUDO_PIP_MID) {
-                    pips.push_back(next_pip);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
+            auto next_wire = ctx->getPipSrcWire(last_pip);
+            last_pip = net->wires.at(next_wire).pip;
+            if (ctx->getPipFlags(last_pip) == PipFlags::PSEUDO_PIP_START)
                 break;
         }
-        for (auto pip : pips) {
-            if (ctx->getPipFlags(pip) == PipFlags::PSEUDO_PIP_START)
-                out << format_name(ctx->getPipName(pip)) << std::endl;
-        }
+        IdStringList srcName =  ctx->getPipName(last_pip);
+        out << "# pip start: " << format_name(ctx->getPipName(last_pip)) << std::endl;
+        IdStringList name = IdStringList::concat(dstName.slice(0, 2), srcName[srcName.size() - 1]);
+        out << format_name(name) << std::endl;
     }
 
     void write_routing(NetInfo *net){
@@ -99,8 +94,8 @@ namespace {
         for (auto pip : sorted_pips){
             if (ctx->getPipFlags(pip) == PipFlags::NORMAL)
                 out << format_name(ctx->getPipName(pip)) << std::endl;  
-            else if (ctx->getPipFlags(pip) == PipFlags::PSEUDO_PIP_START)
-                write_pseudo_pip(pip);
+            else if (ctx->getPipFlags(pip) == PipFlags::PSEUDO_PIP_END)
+                write_pseudo_pip(net, pip);
             else
                 continue;
         }
