@@ -884,6 +884,7 @@ struct Arch : BaseArch<ArchRanges>
     const PadInfoPOD *get_bel_package_pin(BelId bel) const;
     BelId get_package_pin_bel(IdString pin) const;
     int getPipFlags(PipId pip) const;
+    int getWireFlags(WireId wire) const;
 
     // Load capacitance and drive resistance for nodes
     // TODO: does this `dict` hurt routing performance too much?

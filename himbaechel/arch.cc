@@ -583,4 +583,10 @@ int Arch::getPipFlags(PipId pip) const
     return pdata.flags;
 }
 
+int Arch::getWireFlags(WireId wire) const
+{
+    auto &wdata = chip_wire_info(chip_info, wire);
+    return wdata.flags;
+}
+
 NEXTPNR_NAMESPACE_END
