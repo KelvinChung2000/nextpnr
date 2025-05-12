@@ -163,21 +163,31 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         return true;
     }
 
+    bool newPath = false;
     std::vector<std::pair<std::pair<WireId, WireId>, bool>> foundPaths;
     for (auto p : boundedCell->ports){
         if (p.second.type == PORT_IN || p.second.net == nullptr)
             continue;
         
         NetInfo *outnet = p.second.net;
+        WireId srcWire = ctx->getNetinfoSourceWire(outnet);
+        if (srcWire == WireId()){
+            // return true;
+            // log_info("outnet %s\n", outnet->name.c_str(ctx));
+            log_warning("No source wire for net %s\n", ctx->nameOf(outnet));
+            for (auto user: outnet->users){
+                log_warning("   user %s\n", ctx->nameOf(user.cell));
+            }
+            log_error("A bel with no source wire %s\n", ctx->nameOfBel(bel));
+        }
         for (auto user: outnet->users){
-            WireId srcWire = ctx->getNetinfoSourceWire(outnet);
             if (ctx->getNetinfoSinkWireCount(outnet, user) == 0){
                 return true;
             }
             for (auto dstWire : ctx->getNetinfoSinkWires(outnet, user)){
                 auto src_dst = std::make_pair(srcWire, dstWire);
                 if (pathCache.count(src_dst)){
-                    foundPaths.push_back(std::make_pair(src_dst, pathCache.at(src_dst)));
+                    // foundPaths.push_back(std::make_pair(src_dst, pathCache.at(src_dst)));
                     if (explain_invalid){
                         pathCacheExplain[std::make_pair(srcWire, dstWire)] = pathCache.at(std::make_pair(srcWire, dstWire));
                     }
@@ -188,17 +198,21 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
                 if (explain_invalid){
                     pathCacheExplain[src_dst] = result;
                 }
+                newPath = true;
             }
         }
     }
 
-    if (foundPaths.size() == 0){
+    // TODO: need better way to handle this since now will yield false positive
+    if (foundPaths.size() == 0 && !newPath){
+        // No paths found for this cell, but no new paths were found
+        // This means that the cell is not connected to any other cells
+        // and can be placed anywhere
 #if 0
         log_info("      No paths found for cell %s using bel %s\n", ctx->nameOf(boundedCell->name), ctx->nameOfBel(bel));
 #endif
         return true;
     }
-    // log_info("         Found %ld paths for net %s\n", foundPaths.size(), ctx->nameOf(boundedCell->name));
     
     auto sharedBel = sharedResource.at(bel);
     for (auto b : sharedBel){
@@ -223,35 +237,23 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         }
     }
     if (explain_invalid){
-        log_info("No valid paths found for bel %s for cell %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
         for (auto p : pathCacheExplain){
-            log_info("   %s -> %s : %d\n", ctx->nameOfWire(p.first.first), ctx->nameOfWire(p.first.second), p.second);
+            log_info("   %s -> %s : %s\n", ctx->nameOfWire(p.first.first), ctx->nameOfWire(p.first.second), p.second ? "true" : "false");
         }
     }
-
     return false;
 }
 
 bool FABulousImpl::have_path(WireId src, WireId dst) const{
     std::stack<WireId> stack;
     dict<WireId, bool> visited;
-
-    if (pathCache.count(std::make_pair(src, dst))){
-        return pathCache.at(std::make_pair(src, dst));
-    }
     
     stack.push(src);
     bool foundPath = false;
     while (!stack.empty()){
         WireId currentWire = stack.top();
-        
-        // if (std::string(ctx->nameOfWire(currentWire)).find("X1Y2") != std::string::npos) {
-        //     log_info("            Visiting %s\n", ctx->nameOfWire(currentWire));
-        // }
         stack.pop();
         if (currentWire == dst){
-            // log_info("         Found path from %s to %s\n", ctx->nameOfWire(src), ctx->nameOfWire(dst));
-            pathCache[std::make_pair(src, dst)] = true;
             foundPath = true;
             break;
         }
@@ -263,8 +265,8 @@ bool FABulousImpl::have_path(WireId src, WireId dst) const{
             }
         }
     }
-
     // log_info("         Path from %s to %s: %d\n", ctx->nameOfWire(src), ctx->nameOfWire(dst), foundPath);
+    pathCache[std::make_pair(src, dst)] = foundPath;
     return foundPath;
 }
 
@@ -350,6 +352,7 @@ void FABulousImpl::postRoute()
 {
     const ArchArgs &args = ctx->args;
     if (args.options.count("fasm")) {
+        log_info("Writing FASM file to %s\n", args.options.at("fasm").c_str());
         write_fasm(args.options.at("fasm"));
     }
 }

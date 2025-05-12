@@ -167,12 +167,13 @@ void FABulousImpl::rel_constr_cells(CellInfo *a, CellInfo *b, int dz)
         return;
     }
 
+#if 0
     // Print constraint information for both cells
     log_info("Before Constraint for cell %s: cluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", a->name.c_str(ctx), 
              a->cluster.c_str(ctx), a->constr_x, a->constr_y, a->constr_z, a->constr_abs_z, a->constr_children.size());
     log_info("Before Constraint for cell %s: cluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", b->name.c_str(ctx), 
              b->cluster.c_str(ctx), b->constr_x, b->constr_y, b->constr_z, b->constr_abs_z, b->constr_children.size());
-    
+#endif    
     if (a->cluster != ClusterId() && ctx->getClusterRootCell(a->cluster) != a) {
         // a is part of a cluster
         NPNR_ASSERT(b->cluster == ClusterId());
@@ -218,7 +219,7 @@ void FABulousImpl::rel_constr_cells(CellInfo *a, CellInfo *b, int dz)
     // Print constraint information for both cells
     log_info("Constraint for cell %s: cluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", a->name.c_str(ctx), 
              a->cluster.c_str(ctx), a->constr_x, a->constr_y, a->constr_z, a->constr_abs_z, a->constr_children.size());
-    log_info("Constraint for cell %s: cluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", b->name.c_str(ctx), 
+    log_info("Constraint for cell %s: caluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", b->name.c_str(ctx), 
              b->cluster.c_str(ctx), b->constr_x, b->constr_y, b->constr_z, b->constr_abs_z, b->constr_children.size());
 }
 
@@ -228,15 +229,6 @@ void FABulousImpl::pack() {
                 CellTypePort(id_INBUF, id_PAD),
                 CellTypePort(id_OUTBUF, id_PAD),
         };
-    
-    // for (auto &net : ctx->nets){
-    //     auto &n = *net.second;
-    //     log_info("%s\n", n.name.c_str(ctx));
-    //     log_info("  driver: %s\n", n.driver.cell->name.c_str(ctx));
-    //     for (auto &usr : n.users){
-    //         log_info("  user: %s\n", usr.cell->name.c_str(ctx));
-    //     }
-    // }
 
     h.remove_nextpnr_iobs(top_ports);
     remove_fabulous_iob();

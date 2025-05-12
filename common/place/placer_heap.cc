@@ -937,14 +937,6 @@ class HeAPPlacer
                               "attempts.\n",
                               ctx->nameOf(ci), ci->type.c_str(ctx), total_iters_for_cell);
                 }
-                // else{
-                //     placed = true;
-                //     log_warning("Unable to find legal placement for cell '%s' of type '%s' after %d attempts, check "
-                //               "constraints and "
-                //               "utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of "
-                //               "attempts.\n",
-                //               ctx->nameOf(ci), ci->type.c_str(ctx), total_iters_for_cell);
-                // }
 
                 // Determine a search radius around the solver location (which increases over time) that is clamped to
                 // the region constraint for the cell (if applicable)
@@ -1043,7 +1035,7 @@ class HeAPPlacer
                             // Provisionally bind the bel
                             ctx->bindBel(sz, ci, STRENGTH_WEAK);
                             // log_info("      tried binding %s to %s\n", ctx->nameOf(ci), ctx->nameOfBel(sz));
-                            if (require_validity && !ctx->isBelLocationValid(sz)) {
+                            if (require_validity && !ctx->isBelLocationValid(sz, cfg.debug)) {
                                 // New location is not legal; unbind the cell (and rebind the cell we ripped up if
                                 // applicable)
                                 ctx->unbindBel(sz);
@@ -1116,7 +1108,7 @@ class HeAPPlacer
                         }
                         // Check that the move we have made is legal
                         for (auto &sm : swaps_made) {
-                            if (!ctx->isBelLocationValid(sm.first))
+                            if (!ctx->isBelLocationValid(sm.first, cfg.debug))
                                 goto fail;
                         }
 
@@ -1878,6 +1870,8 @@ PlacerHeapCfg::PlacerHeapCfg(Context *ctx)
     timing_driven = ctx->setting<bool>("timing_driven");
     solverTolerance = 1e-5;
     placeAllAtOnce = false;
+
+    debug = ctx->debug;
 
     int timeout_divisor = ctx->setting<int>("placerHeap/cellPlacementTimeout", 8);
     if (timeout_divisor > 0) {

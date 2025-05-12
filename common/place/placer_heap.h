@@ -46,6 +46,7 @@ struct PlacerHeapCfg
     int cell_placement_timeout;
     std::string legalisationStrategy;
     std::string exportInitPlacement;
+    bool debug = false;
 
     int hpwl_scale_x, hpwl_scale_y;
     int spread_scale_x, spread_scale_y;
