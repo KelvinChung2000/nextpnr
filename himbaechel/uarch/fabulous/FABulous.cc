@@ -44,6 +44,7 @@ void FABulousImpl::init_database(Arch *arch)
     }
     arch->load_chipdb("");
     arch->set_speed_grade("DEFAULT");
+    arch->set_package("FABulous");
 }
 
 void FABulousImpl::init(Context *ctx)
@@ -54,8 +55,8 @@ void FABulousImpl::init(Context *ctx)
     fu.init(ctx);
     HimbaechelAPI::init(ctx);
 
-    if (args.options.count("cst")){
-        ctx->settings[ctx->id("cst.filename")] = args.options.at("cst");
+    if (args.options.count("fdc")){
+        ctx->settings[ctx->id("fdc.filename")] = args.options.at("fdc");
     }
     if (args.options.count("constrain-pair")){
         ctx->settings[ctx->id("constrain-pair")] = args.options.at("constrain-pair");
@@ -162,6 +163,9 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
     if (boundedCell == nullptr){
         return true;
     }
+    // TODO: make this generic
+    if (ctx->getBelType(bel) == ctx->id("IO") || ctx->getBelType(bel) == ctx->id("IO_WIDTH_1"))
+        return true;
 
     bool newPath = false;
     std::vector<std::pair<std::pair<WireId, WireId>, bool>> foundPaths;
@@ -180,11 +184,15 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
             }
             log_error("A bel with no source wire %s\n", ctx->nameOfBel(bel));
         }
+
         for (auto user: outnet->users){
             if (ctx->getNetinfoSinkWireCount(outnet, user) == 0){
                 return true;
             }
             for (auto dstWire : ctx->getNetinfoSinkWires(outnet, user)){
+                if (ctx->getWireFlags(dstWire) < ctx->getWireFlags(srcWire)){
+                    return false;
+                }
                 auto src_dst = std::make_pair(srcWire, dstWire);
                 if (pathCache.count(src_dst)){
                     // foundPaths.push_back(std::make_pair(src_dst, pathCache.at(src_dst)));
@@ -208,10 +216,7 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         // No paths found for this cell, but no new paths were found
         // This means that the cell is not connected to any other cells
         // and can be placed anywhere
-#if 0
-        log_info("      No paths found for cell %s using bel %s\n", ctx->nameOf(boundedCell->name), ctx->nameOfBel(bel));
-#endif
-        return true;
+        return false;
     }
     
     auto sharedBel = sharedResource.at(bel);
@@ -303,7 +308,6 @@ bool FABulousImpl::place()
             tryCount++;
             std::random_device randDev{};
             std::uniform_int_distribution<uint64_t> distrib{1};
-            // ctx->rngstate = distrib(randDev);
         }
         auto run_stopt = std::chrono::high_resolution_clock::now();
         log_info("Heap placer took %d iterations and %.02fs seconds\n", tryCount, std::chrono::duration<double>(run_stopt - run_startt).count());

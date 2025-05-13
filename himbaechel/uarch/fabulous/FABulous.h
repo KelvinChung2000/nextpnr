@@ -67,13 +67,7 @@ struct FABulousImpl : HimbaechelAPI
         
         void write_fasm(const std::string &filename);
                 
-        // pack functions 
-        void remove_undrive_constant();
-        void fold_bit_const();
-        void fold_clock_drive();
-        void remove_fabulous_iob();
-        int get_macro_cell_z(const CellInfo *ci);
-        void rel_constr_cells(CellInfo *a, CellInfo *b, int dz);
+        bool fdc_apply(Context *ctx, const std::string &filename);
 
         int context_count = 1;
         int minII = 0;
@@ -82,8 +76,6 @@ struct FABulousImpl : HimbaechelAPI
         dict<IdString, std::vector<IdString>> tile_unique_bel_type;
         dict<BelId, std::vector<BelId>> sharedResource;
         mutable dict<std::pair<WireId, WireId>, bool> pathCache;
-
-
 
 };
 
