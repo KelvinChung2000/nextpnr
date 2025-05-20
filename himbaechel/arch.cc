@@ -589,4 +589,10 @@ int Arch::getWireFlags(WireId wire) const
     return wdata.flags;
 }
 
+int Arch::getBelFlags(BelId bel) const
+{
+    auto &bdata = chip_bel_info(chip_info, bel);
+    return bdata.flags;
+}
+
 NEXTPNR_NAMESPACE_END

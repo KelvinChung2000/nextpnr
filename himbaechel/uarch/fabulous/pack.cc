@@ -238,20 +238,20 @@ struct FABulousPacker
     void remove_fabulous_iob()
     {
 
-        for (auto &cell : ctx->cells){
+        for (auto &cell : ctx->cells) {
             auto &ci = *cell.second;
             if (!ci.type.in(ctx->id("INBUF"), ctx->id("OBUF")))
                 continue;
             NetInfo *i = ci.getPort(ctx->id("I"));
-            if (i && i->driver.cell){
-                for (auto &attr : ci.attrs){
+            if (i && i->driver.cell) {
+                for (auto &attr : ci.attrs) {
                     i->driver.cell->setAttr(attr.first, attr.second);
                 }
             }
             NetInfo *o = ci.getPort(ctx->id("O"));
-            if (o){
-                for (auto &usr : o->users){
-                    for (auto &attr : ci.attrs){
+            if (o) {
+                for (auto &usr : o->users) {
+                    for (auto &attr : ci.attrs) {
                         usr.cell->setAttr(attr.first, attr.second);
                     }
                 }
@@ -265,7 +265,7 @@ struct FABulousPacker
                 continue;
             if (ni.driver.cell->type != ctx->id("INBUF"))
                 continue;
-            
+
             ni.driver.cell->disconnectPort(ctx->id("PAD"));
             net_to_remove.push_back(&ni);
         }
@@ -310,6 +310,8 @@ struct FABulousPacker
 
     void rel_constr_cells(CellInfo *a, CellInfo *b, int dz)
     {
+        NPNR_ASSERT(a != nullptr);
+        NPNR_ASSERT(b != nullptr);
 
         // Check if b is already in a's constraint children, which would create a circular dependency
         if (std::find(a->constr_children.begin(), a->constr_children.end(), b) != a->constr_children.end()) {
@@ -329,13 +331,52 @@ struct FABulousPacker
             return;
         }
 
-#if 0
-        // Print constraint information for both cells
-        log_info("Before Constraint for cell %s: cluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", a->name.c_str(ctx), 
-                a->cluster.c_str(ctx), a->constr_x, a->constr_y, a->constr_z, a->constr_abs_z, a->constr_children.size());
-        log_info("Before Constraint for cell %s: cluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", b->name.c_str(ctx), 
-                b->cluster.c_str(ctx), b->constr_x, b->constr_y, b->constr_z, b->constr_abs_z, b->constr_children.size());
-#endif
+        // if (a->cluster != ClusterId() && b->cluster != ClusterId()) {
+        //     // both a and b is in a cluster
+        //     CellInfo *a_root = ctx->getClusterRootCell(a->cluster);
+        //     CellInfo *b_root = ctx->getClusterRootCell(b->cluster);
+        //     if (ctx->getClusterRootCell(a->cluster) == a ||
+        //         (ctx->getClusterRootCell(a->cluster) != a && ctx->getClusterRootCell(b->cluster) != b)) {
+        //         // a is the root of the cluster
+        //         for (auto i : b_root->constr_children) {
+        //             a_root->constr_children.push_back(i);
+        //             i->cluster = a_root->cluster;
+        //             i->constr_x = a_root->constr_x;
+        //             i->constr_y = a_root->constr_y;
+        //             i->constr_z = (i->constr_z - get_macro_cell_z(b)) + get_macro_cell_z(a) + dz;
+        //             i->constr_abs_z = a_root->constr_abs_z;
+        //         }
+        //         b_root->constr_children.clear();
+        //         b->cluster = a_root->cluster;
+        //         b->constr_x = a->constr_x;
+        //         b->constr_y = a->constr_y;
+        //         b->constr_z = get_macro_cell_z(a) + dz;
+        //         b->constr_abs_z = a->constr_abs_z;
+        //         if (ctx->getClusterRootCell(a->cluster) == a && ctx->getClusterRootCell(a->cluster) == a)
+        //             log_info("Packed cluster %s into cluster %s\n", ctx->nameOf(b->cluster), ctx->nameOf(a->cluster));
+        //         else
+        //             log_info("Packed cluster %s into cluster %s as %s is part of %s\n", ctx->nameOf(b_root),
+        //                      ctx->nameOf(a->cluster), ctx->nameOf(b), ctx->nameOf(b_root));
+        //     } else if (ctx->getClusterRootCell(b->cluster) == b) {
+        //         // b is the root of the cluster
+        //         for (auto i : a_root->constr_children) {
+        //             b_root->constr_children.push_back(i);
+        //             i->cluster = b_root->cluster;
+        //             i->constr_x = b_root->constr_x;
+        //             i->constr_y = b_root->constr_y;
+        //             i->constr_z = (i->constr_z - get_macro_cell_z(a)) + get_macro_cell_z(b) + dz;
+        //             i->constr_abs_z = b_root->constr_abs_z;
+        //         }
+        //         a_root->constr_children.clear();
+        //         a->cluster = a_root->cluster;
+        //         a->constr_x = b->constr_x;
+        //         a->constr_y = b->constr_y;
+        //         a->constr_z = get_macro_cell_z(b) + dz;
+        //         a->constr_abs_z = b->constr_abs_z;
+        //         log_info("Packed cluster %s into cluster %s\n", ctx->nameOf(a_root), ctx->nameOf(b_root));
+        //     }
+
+        // }
         if (a->cluster != ClusterId() && ctx->getClusterRootCell(a->cluster) != a) {
             // a is part of a cluster
             NPNR_ASSERT(b->cluster == ClusterId());
@@ -347,6 +388,7 @@ struct FABulousPacker
             b->constr_y = a->constr_y;
             b->constr_z = get_macro_cell_z(a) + dz;
             b->constr_abs_z = a->constr_abs_z;
+            log_info("Packed cell %s into cell %s via %s (z=%d)\n", ctx->nameOf(b), ctx->nameOf(root), ctx->nameOf(a), b->constr_z);
         } else if (b->cluster != ClusterId() && ctx->getClusterRootCell(b->cluster) != b) {
             // b is part of a cluster
             NPNR_ASSERT(a->constr_children.empty());
@@ -357,6 +399,7 @@ struct FABulousPacker
             a->constr_y = b->constr_y;
             a->constr_z = get_macro_cell_z(b) - dz;
             a->constr_abs_z = b->constr_abs_z;
+            log_info("Packed cell %s into cell %s via %s (z=%d)\n", ctx->nameOf(a), ctx->nameOf(root), ctx->nameOf(b), a->constr_z);
         } else if (!b->constr_children.empty()) {
             // b is a parent cell
             NPNR_ASSERT(a->constr_children.empty());
@@ -366,6 +409,7 @@ struct FABulousPacker
             a->constr_y = 0;
             a->constr_z = get_macro_cell_z(b) - dz;
             a->constr_abs_z = b->constr_abs_z;
+            log_info("Packed cell %s into cell %s (z=%d)\n", ctx->nameOf(a), ctx->nameOf(b), a->constr_z);
         } else {
             // a is a parent cell or both cells are not part of a cluster
             NPNR_ASSERT(a->cluster == ClusterId() || ctx->getClusterRootCell(a->cluster) == a);
@@ -376,28 +420,11 @@ struct FABulousPacker
             b->constr_y = 0;
             b->constr_z = get_macro_cell_z(a) + dz;
             b->constr_abs_z = a->constr_abs_z;
+            log_info("Packed cell %s into cell %s (z=%d)\n", ctx->nameOf(b), ctx->nameOf(a), b->constr_z);
         }
-
-        // Print constraint information for both cells
-        log_info("Constraint for cell %s: cluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", a->name.c_str(ctx),
-                 a->cluster.c_str(ctx), a->constr_x, a->constr_y, a->constr_z, a->constr_abs_z,
-                 a->constr_children.size());
-        log_info("Constraint for cell %s: caluster=%s, x=%d, y=%d, z=%d, abs_z=%d, children=%ld\n", b->name.c_str(ctx),
-                 b->cluster.c_str(ctx), b->constr_x, b->constr_y, b->constr_z, b->constr_abs_z,
-                 b->constr_children.size());
     }
 };
 } // namespace
-
-// Helper function to extract part of a string after a dot character
-std::string static extract_after_dot(const std::string &str)
-{
-    size_t dot_pos = str.find('.');
-    if (dot_pos != std::string::npos && dot_pos < str.size() - 1) {
-        return str.substr(dot_pos + 1);
-    }
-    return ""; // Return empty string if no dot found or dot is at the end
-}
 
 void FABulousImpl::pack()
 {
@@ -406,20 +433,20 @@ void FABulousImpl::pack()
             log_error("Fail to apply FABulous Design Constrain");
     }
 
-    for (auto &cell : ctx->cells){
+    for (auto &cell : ctx->cells) {
         auto &ci = *cell.second;
         if (!ci.type.in(ctx->id("$nextpnr_ibuf"), ctx->id("$nextpnr_obuf"), ctx->id("$nextpnr_iobuf")))
             continue;
         NetInfo *i = ci.getPort(ctx->id("I"));
-        if (i && i->driver.cell){
-            for (auto &attr : ci.attrs){
+        if (i && i->driver.cell) {
+            for (auto &attr : ci.attrs) {
                 i->driver.cell->setAttr(attr.first, attr.second);
             }
         }
         NetInfo *o = ci.getPort(ctx->id("O"));
-        if (o){
-            for (auto &usr : o->users){
-                for (auto &attr : ci.attrs){
+        if (o) {
+            for (auto &usr : o->users) {
+                for (auto &attr : ci.attrs) {
                     usr.cell->setAttr(attr.first, attr.second);
                 }
             }
@@ -443,7 +470,6 @@ void FABulousImpl::pack()
     //         ci->name = ctx->id(newName);
     //     }
     // }
-
 
     if (ctx->settings.count(ctx->id("constrain-pair"))) {
         FABulousPacker packer(ctx, ctx->settings[ctx->id("constrain-pair")].as_string());

@@ -13,9 +13,6 @@ NPNR_PACKED_STRUCT(struct Chip_extra_data_POD {
     int32_t realBelCount;
 });
 
-NPNR_PACKED_STRUCT(struct Bel_extra_data_POD {
-    int32_t context;
-});
 
 NPNR_PACKED_STRUCT(struct Tile_extra_data_POD {
     int32_t uniqueBelCount;
@@ -23,6 +20,17 @@ NPNR_PACKED_STRUCT(struct Tile_extra_data_POD {
     int32_t eastPortCount;
     int32_t southPortCount;
     int32_t westPortCount;
+});
+
+NPNR_PACKED_STRUCT(struct Bel_pin_flag_POD{
+    int32_t pin;
+    int32_t flags;
+    static constexpr uint32_t FLAG_INTERNAL = 0x01; 
+});
+
+NPNR_PACKED_STRUCT(struct Bel_extra_data_POD {
+    int32_t context;
+    RelSlice<Bel_pin_flag_POD> pinFlags;
 });
 
 struct FABulousImpl : HimbaechelAPI
