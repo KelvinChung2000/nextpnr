@@ -31,6 +31,15 @@
 
 NEXTPNR_NAMESPACE_BEGIN
 
+// Seed placement strategy options
+enum SeedPlacementStrategy
+{
+    RANDOM,     // Completely random initial placement - cells are placed at random valid locations
+    RANDOM_BFS, // Breadth-first placement starting from the center of the device
+    GREEDY,      // Connectivity-aware placement - cells are placed near their connected neighbors
+    GRAPH_GRID  // Places cells based on netlist graph connectivity and grid proximity
+};
+
 struct PlacerHeapCfg
 {
     PlacerHeapCfg(Context *ctx);
@@ -47,6 +56,9 @@ struct PlacerHeapCfg
     std::string legalisationStrategy;
     std::string exportInitPlacement;
     bool debug = false;
+
+    // Seed placement strategy selection
+    SeedPlacementStrategy seedPlacementStrategy;
 
     int hpwl_scale_x, hpwl_scale_y;
     int spread_scale_x, spread_scale_y;
