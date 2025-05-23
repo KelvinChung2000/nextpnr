@@ -174,7 +174,7 @@ struct Router1
     {
         arc_entry entry = arc_queue.top();
 
-#if 0
+#if 1
         if (ctx->debug)
             log("[arc_queue_pop] %s (%d) [%d %d]\n", ctx->nameOf(entry.arc.net_info), entry.arc.user_idx,
                 (int)entry.pri, entry.randtag);
@@ -370,15 +370,37 @@ struct Router1
         dict<WireId, NetInfo *> src_to_net;
         dict<WireId, arc_key> dst_to_arc;
 
-        std::vector<IdString> net_names;
-        for (auto &net_it : ctx->nets)
-            net_names.push_back(net_it.first);
+        std::vector<std::pair<IdString, int>> net_names;
+        for (auto &net_it : ctx->nets) {
+            int dist_sum = 0;
+            if (net_it.second->driver.cell != nullptr){
+                BelId driver_bel = net_it.second->driver.cell->bel;
+                if (driver_bel == BelId())
+                    continue;
+                Loc driver_loc = ctx->getBelLocation(driver_bel);
+                for (auto user : net_it.second->users){
+                    if (user.cell == nullptr)
+                        continue;
+                    BelId user_bel = user.cell->bel;
+                    if (user_bel == BelId())
+                        continue;
+                    Loc user_loc = ctx->getBelLocation(user_bel);
+                    dist_sum += std::abs(user_loc.x - driver_loc.x)  + std::abs(user_loc.y - driver_loc.y);
+                }
+            }
+            net_names.push_back({net_it.first, dist_sum});
+        }
 
-        ctx->sorted_shuffle(net_names);
+        std::sort(net_names.begin(), net_names.end(),
+                  [](const std::pair<IdString, int> &a, const std::pair<IdString, int> &b) {
+                      return a.second < b.second;
+                  });
 
-        for (IdString net_name : net_names) {
+        // ctx->sorted_shuffle(net_names);
+
+        log_info("Routing net\n");
+        for (auto [net_name, dist] : net_names) {
             NetInfo *net_info = ctx->nets.at(net_name).get();
-
             if (skip_net(net_info))
                 continue;
 
@@ -1156,6 +1178,7 @@ Router1Cfg::Router1Cfg(Context *ctx)
     reuseBonus = wireRipupPenalty / 2;
 
     estimatePrecision = 100 * ctx->getRipupDelayPenalty();
+    timeout = ctx->setting<int>("router1/timeout", 0);
 }
 
 bool router1(Context *ctx, const Router1Cfg &cfg)

@@ -391,14 +391,16 @@ po::options_description CommandHandler::getGeneralOptions()
                           "N, default: 8, 0 for no timeout)");
     general.add_options()("placer-heap-export-init-placement", po::value<std::string>(), 
                           "writing the heap placer init placement. Mainly for exploration purposes.");
+    general.add_options()("placer-heap-seed-placement-strategy", po::value<std::string>(),
+                          "seed placement strategy for heap placer (options: random, random_bfs, greedy, default: random)");
 
     general.add_options()("static-dump-density", "write density csv files during placer-static flow");
 
 #if !defined(NPNR_DISABLE_THREADS)
     general.add_options()("parallel-refine", "use new experimental parallelised engine for placement refinement");
 #endif
-
-    general.add_options()("router1-timeout", po::value<int>(), "Timeout for router1 in iteration count (default: 0, no timeout)");
+    general.add_options()("router1-timeout", po::value<int>(),
+                          "timeout for router1 in seconds (default: 0, no timeout)");
 
     general.add_options()("router2-heatmap", po::value<std::string>(),
                           "prefix for router2 resource congestion heatmaps");
@@ -544,6 +546,10 @@ void CommandHandler::setupContext(Context *ctx)
 
     if (vm.count("placer-heap-export-init-placement"))
         ctx->settings[ctx->id("placerHeap/exportInitPlacement")] = vm["placer-heap-export-init-placement"].as<std::string>();
+
+    if (vm.count("placer-heap-seed-placement-strategy")) {
+        ctx->settings[ctx->id("placerHeap/seedPlacementStrategy")] = vm["placer-heap-seed-placement-strategy"].as<std::string>();
+    }
 
     if (vm.count("parallel-refine"))
         ctx->settings[ctx->id("placerHeap/parallelRefine")] = true;
