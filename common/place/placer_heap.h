@@ -53,21 +53,26 @@ struct PlacerHeapCfg
     float netShareWeight;
     bool parallelRefine;
     int cell_placement_timeout;
+    double archConnectivityFactor;
+    int maxHops;
     std::string legalisationStrategy;
     std::string exportInitPlacement;
     bool debug = false;
-
+    
     // Seed placement strategy selection
     SeedPlacementStrategy seedPlacementStrategy;
-
+    
     int hpwl_scale_x, hpwl_scale_y;
     int spread_scale_x, spread_scale_y;
-
+    
     // These cell types will be randomly locked to prevent singular matrices
     pool<IdString> ioBufTypes;
     // These cell types are part of the same unit (e.g. slices split into
     // components) so will always be spread together
     std::vector<pool<BelBucketId>> cellGroups;
+
+    // Store the search result for bel connectivity to avoid recomputing it
+    dict<std::pair<WireId, WireId>, int> belConnectivityCache;
 };
 
 extern bool placer_heap(Context *ctx, PlacerHeapCfg cfg);

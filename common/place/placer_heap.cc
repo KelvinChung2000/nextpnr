@@ -437,7 +437,7 @@ class HeAPPlacer
     // Performance counting
     double solve_time = 0, cl_time = 0, sl_time = 0;
 
-    int run_bfs_for_pip_hops(WireId start_wire, WireId end_wire, int max_hops)
+    int get_wire_hops(WireId start_wire, WireId end_wire)
     {
         if (start_wire == WireId() || end_wire == WireId()) {
             return -1; // Invalid wires
@@ -446,6 +446,10 @@ class HeAPPlacer
             return 0; // Same wire
         }
 
+        if (cfg.belConnectivityCache.count({start_wire, end_wire})) {
+            return cfg.belConnectivityCache[{start_wire, end_wire}];
+        }
+        
         std::queue<std::pair<WireId, int>> q; // Use std::queue for BFS
         q.push({start_wire, 0});
         pool<WireId> visited;
@@ -457,11 +461,13 @@ class HeAPPlacer
             q.pop();
 
             if (current_wire == end_wire) {
+                cfg.belConnectivityCache[{start_wire, end_wire}] = current_hops;
                 return current_hops;
             }
 
-            if (current_hops >= max_hops) {
-                continue; // Stop exploring if max_hops is reached
+            if (current_hops >= cfg.maxHops) {
+                cfg.belConnectivityCache[{start_wire, end_wire}] = cfg.maxHops;
+                return cfg.maxHops; // Stop exploring if max_hops is reached
             }
 
             // Explore downhill PIPs
@@ -481,20 +487,18 @@ class HeAPPlacer
                 }
             }
         }
+        cfg.belConnectivityCache[{start_wire, end_wire}] = -1;
         return -1; // No path found
     }
 
     // Calculate average PIP hop distance from cell_to_place (at candidate_bel) to its connected, already placed
     // neighbors
-    int calculate_pip_hop_distance(CellInfo *cell_to_place, BelId candidate_bel, int max_bfs_hops)                                    // Parameter name updated for clarity
+    int calculate_pip_hop_distance(CellInfo *cell_to_place, BelId candidate_bel)
     {
         long long cumulative_hops = 0;
         int connected_placed_neighbors = 0;
 
-        auto valid_loc = [&](const Loc& loc) {
-            return loc.x >= 0 && loc.y >= 0 && loc.z >= 0;
-        };
-
+        auto valid_loc = [&](const Loc &loc) { return loc.x >= 0 && loc.y >= 0 && loc.z >= 0; };
 
         for (auto p : cell_to_place->ports) {
             if (p.second.net == nullptr)
@@ -505,10 +509,9 @@ class HeAPPlacer
                 auto driver_cell = p.second.net->driver.cell;
                 if (driver_cell == nullptr || driver_cell->isPseudo())
                     continue;
-                Loc bel_loc(cell_locs[driver_cell->name].x,
-                            cell_locs[driver_cell->name].y,
+                Loc bel_loc(cell_locs[driver_cell->name].x, cell_locs[driver_cell->name].y,
                             cell_locs[driver_cell->name].z);
-                
+
                 if (!valid_loc(bel_loc)) {
                     continue; // Skip invalid locations
                 }
@@ -521,17 +524,16 @@ class HeAPPlacer
 
                 WireId wire_on_driver_bel = ctx->getBelPinWire(driver_bel, p.second.net->driver.port);
                 if (wire_on_driver_bel != WireId()) {
-                    int hops = run_bfs_for_pip_hops(wire_on_driver_bel, pin_wire, max_bfs_hops);
+                    int hops = get_wire_hops(wire_on_driver_bel, pin_wire);
                     if (hops != -1) {
-                        cumulative_hops += hops;
+                        cumulative_hops += hops*2;
                         connected_placed_neighbors++;
                     }
                 }
             }
-            if (p.second.type == PORT_OUT){
+            if (p.second.type == PORT_OUT) {
                 for (auto user : p.second.net->users) {
-                    Loc bel_loc(cell_locs[user.cell->name].x,
-                                cell_locs[user.cell->name].y,
+                    Loc bel_loc(cell_locs[user.cell->name].x, cell_locs[user.cell->name].y,
                                 cell_locs[user.cell->name].z);
 
                     if (!valid_loc(bel_loc)) {
@@ -543,16 +545,14 @@ class HeAPPlacer
                         continue;
                     }
 
-
                     WireId wire_on_user_bel = ctx->getBelPinWire(user_bel, user.port);
-                    if (wire_on_user_bel != WireId()){
-                        int hops = run_bfs_for_pip_hops(pin_wire, wire_on_user_bel, max_bfs_hops);
-                        if (hops != -1){
+                    if (wire_on_user_bel != WireId()) {
+                        int hops = get_wire_hops(pin_wire, wire_on_user_bel);
+                        if (hops != -1) {
                             cumulative_hops += hops;
                             connected_placed_neighbors++;
                         }
                     }
-                    
                 }
             }
         }
@@ -560,15 +560,8 @@ class HeAPPlacer
         if (connected_placed_neighbors == 0) {
             return 0; // No connected placed neighbors found
         }
-        if (cumulative_hops == 0 && connected_placed_neighbors > 0)
-            return 0;
 
-        // Ensure no division by zero and handle potential overflow if cumulative_hops is huge
-        if (connected_placed_neighbors > 0 &&
-            cumulative_hops / connected_placed_neighbors > std::numeric_limits<int>::max()) {
-            return std::numeric_limits<int>::max();
-        }
-        return static_cast<int>(cumulative_hops / connected_placed_neighbors); // Average hop distance
+        return cumulative_hops;
     }
 
     // Place cells with the BEL attribute set to constrain them
@@ -670,7 +663,8 @@ class HeAPPlacer
         }
     }
 
-    void build_netlist_adj(){
+    void build_netlist_adj()
+    {
         for (auto &net_entry : ctx->nets) {
             NetInfo *ni = net_entry.second.get();
             if (ni->driver.cell == nullptr || ni->users.empty() || ni->driver.cell->isPseudo())
@@ -779,7 +773,7 @@ class HeAPPlacer
             if (ci->isPseudo()) {
                 Loc loc = ci->pseudo_cell->getLocation();
                 cell_locs[cell.first].x = loc.x;
-                cell_locs[cell.first].y = loc.y;;
+                cell_locs[cell.first].y = loc.y;
                 cell_locs[cell.first].locked = true;
                 cell_locs[cell.first].global = false;
                 continue;
@@ -974,7 +968,7 @@ class HeAPPlacer
         log_info("Seed placement strategy: graph_grid with sparseness heuristic (simplified)\n");
 
         pool<BelId> bels_used;
-        std::set<std::pair<int, int>> occupied_seed_grids;
+        pool<std::pair<int, int>> occupied_seed_grids;
         dict<IdString, BelId> placed_cell_to_bel_map;
 
         for (auto &cell_entry : ctx->cells) {
@@ -1003,12 +997,17 @@ class HeAPPlacer
         {
             IdString name;
             CellInfo *cell_info;
+            bool is_io;
             bool is_neighbor_of_placed;
             int connectivity_score; // Out-degree
             int bel_resource_score;
+
             // Custom comparison for sorting
             bool operator<(const SeedCandidate &other) const
             {
+                if (is_io != other.is_io) {
+                    return is_io; // I/O cells should come first
+                }
                 if (is_neighbor_of_placed != other.is_neighbor_of_placed) {
                     return is_neighbor_of_placed; // true (is neighbor) should come before false
                 }
@@ -1049,7 +1048,12 @@ class HeAPPlacer
                     }
                 }
             }
-            candidates.push_back({ci->name, ci, cell_locs.at(ci->name).locked, out_degree, bel_score});
+
+            log_info("Candidate: %s, Type: %s, Out-degree: %d, BEL score: %d is_io: %d\n", ci->name.c_str(ctx),
+                     ci->type.c_str(ctx), out_degree, bel_score, cfg.ioBufTypes.count(cell.second->type) > 0);
+
+            candidates.push_back({ci->name, ci, cfg.ioBufTypes.count(cell.second->type) > 0, cell_locs.at(ci->name).locked,
+                                  out_degree, bel_score});
         }
 
         // Sort candidates based on the defined priorities
@@ -1058,10 +1062,9 @@ class HeAPPlacer
         // Iteratively place cells using BFS-like approach with sparseness heuristic
         int max_search_radius = std::max(max_x, max_y) / 2 + 5;
         int sparseness_weight_factor = 1;
-        const int max_bfs_hop = 15;
 
         auto calculate_sparseness_metric = [&](int cx, int cy,
-                                               const std::set<std::pair<int, int>> &current_occupied_grids) {
+                                               const pool<std::pair<int, int>> &current_occupied_grids) {
             int free_neighbors = 0;
             for (int dx_s = -1; dx_s <= 1; ++dx_s) {
                 for (int dy_s = -1; dy_s <= 1; ++dy_s) {
@@ -1070,7 +1073,7 @@ class HeAPPlacer
                     int nnx = cx + dx_s;
                     int nny = cy + dy_s;
                     if (nnx >= 0 && nnx <= max_x && nny >= 0 && nny <= max_y) {
-                        if (current_occupied_grids.find({nnx, nny}) == current_occupied_grids.end()) {
+                        if (!current_occupied_grids.count({nnx, nny})) {
                             free_neighbors++;
                         }
                     } else {
@@ -1122,7 +1125,7 @@ class HeAPPlacer
                 //         ctx->shuffle(y_slice.begin(), y_slice.end());
                 //     }
                 // }
-                
+
                 for (int r = 0; r < max_search_radius && !found_bel_for_this_cell; ++r) {
                     // Stop if best in radius found
                     bool candidate_found_in_current_radius = false;
@@ -1144,7 +1147,7 @@ class HeAPPlacer
                                     Loc current_bel_loc = ctx->getBelLocation(bel);
 
                                     int actual_distance;
-                                    int pip_hop_dist = calculate_pip_hop_distance(current_ci, bel, max_bfs_hop);
+                                    int pip_hop_dist = calculate_pip_hop_distance(current_ci, bel);
 
                                     if (pip_hop_dist <= 0) {
                                         // Fallback to Manhattan distance from CoG if no connected placed neighbors or
@@ -1162,14 +1165,16 @@ class HeAPPlacer
                                     // neighbors).
                                     int score = actual_distance - sparseness * sparseness_weight_factor;
                                     // int score = value_to_square * value_to_square;
-                                    
+
                                     if (score < best_score) {
+                                        if (ctx->debug)
+                                            log_info("Current Best: Cell %s, BEL %s, score %d, distance %d, sparseness %d, pip_hop %d\n\n",
+                                                    current_ci->name.c_str(ctx), ctx->nameOfBel(bel), score,
+                                                    actual_distance, sparseness, pip_hop_dist);
                                         best_score = score;
                                         best_bel_for_current = bel;
                                         best_loc_for_current = current_bel_loc;
                                         candidate_found_in_current_radius = true;
-                                        log_info("Cell %s, BEL %s, score %d, distance %d, sparseness %d, pip_hop %d\n", current_ci->name.c_str(ctx),
-                                                  ctx->nameOfBel(bel), score, actual_distance, sparseness, pip_hop_dist);
                                     }
                                 }
                             }
@@ -1197,14 +1202,14 @@ class HeAPPlacer
             bels_used.insert(best_bel_for_current);
             placed_cell_to_bel_map[candidate.name] = best_bel_for_current;
             occupied_seed_grids.insert({best_loc_for_current.x, best_loc_for_current.y});
-            
+
             if (cfg.ioBufTypes.count(current_ci->type)) {
                 ctx->bindBel(best_bel_for_current, current_ci, STRENGTH_STRONG);
                 NPNR_ASSERT(ctx->isBelLocationValid(best_bel_for_current, true));
                 cell_locs[candidate.name].locked = true;
             } else {
                 place_cells.push_back(current_ci);
-            } 
+            }
             log_break();
         }
     }
@@ -1325,6 +1330,19 @@ class HeAPPlacer
                     if (user_idx) {
                         weight *= (1.0 + cfg.timingWeight * std::pow(tmg.get_criticality(CellPortKey(port)),
                                                                      cfg.criticalityExponent));
+                    }
+
+                    if (cfg.archConnectivityFactor){
+                        CellInfo *this_cell = port.cell;
+                        CellInfo *other_cell = other->cell;
+
+                        if (this_cell->bel != BelId() && other_cell->bel != BelId()) {
+                            WireId this_wire = ctx->getBelPinWire(this_cell->bel, port.port);
+                            WireId other_wire = ctx->getBelPinWire(other_cell->bel, other->port);
+                            // inverse connectivity factor
+                            // log_info("%lf\n ", cfg.archConnectivityFactor / std::max(double(get_wire_hops(this_wire, other_wire)), 1.0));
+                            weight *= 1.0 + (cfg.archConnectivityFactor / std::max(double(get_wire_hops(this_wire, other_wire)), 1.0));
+                        }
                     }
 
                     // If cell 0 is not fixed, it will stamp +w on its equation and -w on the other end's equation,
@@ -1581,7 +1599,8 @@ class HeAPPlacer
                             } else if (iter_at_radius < need_to_explore) {
                                 // log_info("         Tried not enough but legal\n");
                                 // It's legal, but we haven't tried enough locations yet
-                                // log_info("      binding %s to %s is legal but not try enough\n", ctx->nameOf(ci), ctx->nameOfBel(sz));
+                                // log_info("      binding %s to %s is legal but not try enough\n", ctx->nameOf(ci),
+                                // ctx->nameOfBel(sz));
                                 ctx->unbindBel(sz);
                                 if (bound != nullptr)
                                     ctx->bindBel(sz, bound, STRENGTH_WEAK);
@@ -2402,6 +2421,8 @@ PlacerHeapCfg::PlacerHeapCfg(Context *ctx)
     timingWeight = ctx->setting<int>("placerHeap/timingWeight");
     parallelRefine = ctx->setting<bool>("placerHeap/parallelRefine", false);
     netShareWeight = ctx->setting<float>("placerHeap/netShareWeight", 0);
+    archConnectivityFactor = ctx->setting<double>("placerHeap/archConnectivityFactor", 0.0);
+    maxHops = ctx->setting<int>("placerHeap/maxHops", 15);
 
     // Set seed placement strategy based on settings
     std::string seedStrategy = ctx->setting<std::string>("placerHeap/seedPlacementStrategy");

@@ -393,6 +393,10 @@ po::options_description CommandHandler::getGeneralOptions()
                           "writing the heap placer init placement. Mainly for exploration purposes.");
     general.add_options()("placer-heap-seed-placement-strategy", po::value<std::string>(),
                           "seed placement strategy for heap placer (options: random, random_bfs, greedy, default: random)");
+    general.add_options()("placer-heap-arch-connectivity-factor", po::value<double>(),
+                          "factor for architecture connectivity aware placement (default: 0.0)");
+    general.add_options()("placer-heap-max-hops", po::value<int>(),
+                          "maximum depth of hop search for architecture connectivity aware placement (default: 15)");
 
     general.add_options()("static-dump-density", "write density csv files during placer-static flow");
 
@@ -547,9 +551,16 @@ void CommandHandler::setupContext(Context *ctx)
     if (vm.count("placer-heap-export-init-placement"))
         ctx->settings[ctx->id("placerHeap/exportInitPlacement")] = vm["placer-heap-export-init-placement"].as<std::string>();
 
-    if (vm.count("placer-heap-seed-placement-strategy")) {
+    if (vm.count("placer-heap-seed-placement-strategy"))
         ctx->settings[ctx->id("placerHeap/seedPlacementStrategy")] = vm["placer-heap-seed-placement-strategy"].as<std::string>();
-    }
+
+    if (vm.count("placer-heap-max-hops"))
+        ctx->settings[ctx->id("placerHeap/maxHops")] =
+                std::to_string(std::max(0, vm["placer-heap-max-hops"].as<int>()));
+
+    if (vm.count("placer-heap-arch-connectivity-factor"))
+        ctx->settings[ctx->id("placerHeap/archConnectivityFactor")] =
+                std::to_string(vm["placer-heap-arch-connectivity-factor"].as<double>());
 
     if (vm.count("parallel-refine"))
         ctx->settings[ctx->id("placerHeap/parallelRefine")] = true;

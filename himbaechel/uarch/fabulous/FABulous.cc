@@ -83,16 +83,18 @@ void FABulousImpl::init(Context *ctx)
     tile_unique_bel_type = fu.get_tile_unique_bel_type();
     log_info("%ld unique Tile types found.\n", tile_unique_bel_type.size());
     for (auto &tile : tile_unique_bel_type) {
+        log_info("Tile %s has: ", tile.first.c_str(ctx));
         // subtract 3 for the CLK_DRV, GND_DRV and VCC_DRV
-        log_info("   Tile %s has:\n", tile.first.c_str(ctx));
         if (tile.second.size() > 0) {
             for (auto &bel : tile.second) {
                 if (bel == id_CLK_DRV || bel == id_GND_DRV || bel == id_VCC_DRV)
                     continue;
-                log_info("      %s\n", bel.c_str(ctx));
+                log("%s ", bel.c_str(ctx));
             }
         }
+        log("\n");
     }
+
 }
 
 void FABulousImpl::assign_resource_shared()
@@ -113,11 +115,6 @@ void FABulousImpl::assign_resource_shared()
             }
         }
         sharedResource[bel] = sharedBel;
-        // log_info("Bel %s has shared Bels:\n", ctx->nameOfBel(bel));
-        // for (auto shared : sharedBel) {
-        //     log_info("   %s\n", ctx->nameOfBel(shared));
-        // }
-        // log_info("\n");
     }
 }
 
@@ -178,37 +175,71 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         }
     }
 
-    // bel with no external connectivity
-    for (auto p : boundedCell->ports) {
-        if (p.second.net == nullptr)
-        continue;
-        
-        if (p.second.type == PortType::PORT_IN) {
-            if (!fu.is_tile_internal_bel_pin(bel, p.second.name))
+    for (auto [port_name, port_info]: boundedCell->ports) {
+        if (port_info.net == nullptr)
             continue;
-            auto driverCell = p.second.net->driver.cell;
-            IdString driverCellType;
-            if (driverCell)
-            driverCellType = driverCell->type;
-            else
-            continue;
-            
-            Loc loc = ctx->getBelLocation(bel);
-            auto uniqueBel = tile_unique_bel_type.at(fu.get_tile_type(loc.x, loc.y));
-            auto i = std::find(uniqueBel.begin(), uniqueBel.end(), driverCellType);
-            if (i == uniqueBel.end()) {
+        if (ioBufTypes.count(boundedCell->type))
+            break;
+        if (port_info.type == PortType::PORT_IN) {
+            // printf("Bel: %s, Port: %s, Net: %s\n", ctx->nameOfBel(bel), ctx->nameOf(p.first),
+            //        ctx->nameOf(p.second.net));
+            if (fu.is_tile_internal_bel_pin(bel, port_info.name) && boundedCell->cluster == ClusterId()) {
                 if (explain_invalid) {
-                    log_info("Driver cell type %s\n", ctx->nameOf(driverCellType));
-                    log_info("Current tile available Bel:\n");
-                    for (auto b : uniqueBel)
-                    log_info("  %s \n", ctx->nameOf(b));
-                    log_info("Invalid placement due to internal bel %s\n", ctx->nameOfBel(bel));
+                    log_info("Invalid bel %s for cell %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
+                    log_info("   port: %s\n", ctx->nameOf(port_info.name));
+                    log_info("The bel port is fully internal and should be placed in a cluster\n");
                 }
                 return false;
             }
-            continue;
         }
     }
+
+
+    // // bel with no external connectivity
+    // for (auto [port_name, port_info]: boundedCell->ports) {
+    //     if (port_info.net == nullptr)
+    //     continue;
+        
+    //     if (port_info.type == PortType::PORT_IN) {
+    //         // printf("Bel: %s, Port: %s, Net: %s\n", ctx->nameOfBel(bel), ctx->nameOf(p.first),
+    //         //        ctx->nameOf(p.second.net));
+    //         if (!fu.is_tile_internal_bel_pin(bel, p.second.name))
+    //             continue;
+    //         printf("Is fully internal bel %s\n", ctx->nameOfBel(bel));
+    //         auto driver = port_info.net->driver;
+            
+    //         WireId srcWire = ctx->getNetinfoSourceWire(port_info.net);
+    //         for (auto user : port_info.net->users){
+    //             for (auto dstWire : ctx->getNetinfoSinkWires(port_info.net, user)){
+    //                 if (srcWire == dstWire){
+    //                     return true;
+    //                 }
+    //             }
+    //         }
+
+
+    //         IdString driverCellType;
+    //         // if (driverCell)
+    //         //     driverCellType = driverCell->type;
+    //         // else
+    //         //     continue;
+            
+    //         Loc loc = ctx->getBelLocation(bel);
+    //         auto uniqueBel = tile_unique_bel_type.at(fu.get_tile_type(loc.x, loc.y));
+    //         auto i = std::find(uniqueBel.begin(), uniqueBel.end(), driverCellType);
+    //         if (i == uniqueBel.end()) {
+    //             if (explain_invalid) {
+    //                 log_info("Driver cell type %s\n", ctx->nameOf(driverCellType));
+    //                 log_info("Current tile available Bel:\n");
+    //                 for (auto b : uniqueBel)
+    //                 log_info("  %s \n", ctx->nameOf(b));
+    //                 log_info("Invalid placement due to internal bel %s\n", ctx->nameOfBel(bel));
+    //             }
+    //             return false;
+    //         }
+    //         continue;
+    //     }
+    // }
     
     // bel can connect to external
     bool newPath = false;
@@ -231,9 +262,6 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         }
 
         for (auto user : outnet->users) {
-            if (ctx->getNetinfoSinkWireCount(outnet, user) == 0) {
-                return true;
-            }
             for (auto dstWire : ctx->getNetinfoSinkWires(outnet, user)) {
                 // if (ctx->getWireFlags(dstWire) < ctx->getWireFlags(srcWire)) {
                 //     if (explain_invalid) {
@@ -324,6 +352,9 @@ bool FABulousImpl::place()
     if (placer == "heap") {
         PlacerHeapCfg cfg(ctx);
         configurePlacerHeap(cfg);
+        for (auto c : ioBufTypes) {
+            cfg.ioBufTypes.insert(c);
+        }
         cfg.ioBufTypes.insert(ctx->id("GENERIC_IOB"));
         auto run_startt = std::chrono::high_resolution_clock::now();
         while (tryCount < placeTrial) {

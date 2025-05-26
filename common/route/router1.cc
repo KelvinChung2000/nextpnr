@@ -174,7 +174,7 @@ struct Router1
     {
         arc_entry entry = arc_queue.top();
 
-#if 1
+#if 0
         if (ctx->debug)
             log("[arc_queue_pop] %s (%d) [%d %d]\n", ctx->nameOf(entry.arc.net_info), entry.arc.user_idx,
                 (int)entry.pri, entry.randtag);
@@ -1178,7 +1178,6 @@ Router1Cfg::Router1Cfg(Context *ctx)
     reuseBonus = wireRipupPenalty / 2;
 
     estimatePrecision = 100 * ctx->getRipupDelayPenalty();
-    timeout = ctx->setting<int>("router1/timeout", 0);
 }
 
 bool router1(Context *ctx, const Router1Cfg &cfg)
@@ -1229,6 +1228,18 @@ bool router1(Context *ctx, const Router1Cfg &cfg)
             }
             if (cfg.maxIterCnt){
                 if (iter_cnt > cfg.maxIterCnt) {
+                    log("  Current arc_queue size: %zu\n", router.arc_queue.size());
+                    if (!router.arc_queue.empty()) {
+                        log("  Arc_queue contents (top to bottom):\n");
+                        std::priority_queue<arc_entry, std::vector<arc_entry>, arc_entry::Less> temp_arc_queue = router.arc_queue;
+                        while (!temp_arc_queue.empty()) {
+                            arc_entry entry = temp_arc_queue.top();
+                            temp_arc_queue.pop();
+                            log("    Net: %s, UserIdx: %d, PhysIdx: %u, Priority: %d, Randtag: %d\n",
+                                ctx->nameOf(entry.arc.net_info), entry.arc.user_idx.idx(), entry.arc.phys_idx,
+                                (int)entry.pri, entry.randtag);
+                        }
+                    }
                     log_error("Max iteration count reached, stopping routing.\n");
                 }
             }

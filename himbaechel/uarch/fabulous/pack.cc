@@ -428,6 +428,28 @@ struct FABulousPacker
 
 void FABulousImpl::pack()
 {
+
+    for (auto &cell : ctx->cells) {
+        auto &ci = *cell.second;
+        if (ci.type.in(ctx->id("INBUF"), ctx->id("OUTBUF"))){
+            NetInfo *i = ci.getPort(ctx->id("I"));
+            if (i && i->driver.cell) {
+                if (!ioBufTypes.count(i->driver.cell->type))
+                    log_info("Detected cell type %s is an IO type cell\n", i->driver.cell->type.c_str(ctx));
+                ioBufTypes.insert(i->driver.cell->type);
+            }
+
+            NetInfo *o = ci.getPort(ctx->id("O"));
+            if (o) {
+                for (auto &usr : o->users){
+                    if (!ioBufTypes.count(usr.cell->type))
+                        log_info("Detected cell type %s is an IO type cell\n", usr.cell->type.c_str(ctx));
+                    ioBufTypes.insert(usr.cell->type);
+                }
+            }
+        }
+    }
+
     if (ctx->settings.count(ctx->id("fdc.filename"))) {
         if (!fdc_apply(ctx, ctx->settings[ctx->id("fdc.filename")].as_string()))
             log_error("Fail to apply FABulous Design Constrain");
