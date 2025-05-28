@@ -194,55 +194,7 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         }
     }
 
-
-    // // bel with no external connectivity
-    // for (auto [port_name, port_info]: boundedCell->ports) {
-    //     if (port_info.net == nullptr)
-    //     continue;
-        
-    //     if (port_info.type == PortType::PORT_IN) {
-    //         // printf("Bel: %s, Port: %s, Net: %s\n", ctx->nameOfBel(bel), ctx->nameOf(p.first),
-    //         //        ctx->nameOf(p.second.net));
-    //         if (!fu.is_tile_internal_bel_pin(bel, p.second.name))
-    //             continue;
-    //         printf("Is fully internal bel %s\n", ctx->nameOfBel(bel));
-    //         auto driver = port_info.net->driver;
-            
-    //         WireId srcWire = ctx->getNetinfoSourceWire(port_info.net);
-    //         for (auto user : port_info.net->users){
-    //             for (auto dstWire : ctx->getNetinfoSinkWires(port_info.net, user)){
-    //                 if (srcWire == dstWire){
-    //                     return true;
-    //                 }
-    //             }
-    //         }
-
-
-    //         IdString driverCellType;
-    //         // if (driverCell)
-    //         //     driverCellType = driverCell->type;
-    //         // else
-    //         //     continue;
-            
-    //         Loc loc = ctx->getBelLocation(bel);
-    //         auto uniqueBel = tile_unique_bel_type.at(fu.get_tile_type(loc.x, loc.y));
-    //         auto i = std::find(uniqueBel.begin(), uniqueBel.end(), driverCellType);
-    //         if (i == uniqueBel.end()) {
-    //             if (explain_invalid) {
-    //                 log_info("Driver cell type %s\n", ctx->nameOf(driverCellType));
-    //                 log_info("Current tile available Bel:\n");
-    //                 for (auto b : uniqueBel)
-    //                 log_info("  %s \n", ctx->nameOf(b));
-    //                 log_info("Invalid placement due to internal bel %s\n", ctx->nameOfBel(bel));
-    //             }
-    //             return false;
-    //         }
-    //         continue;
-    //     }
-    // }
-    
     // bel can connect to external
-    bool newPath = false;
     std::vector<std::pair<std::pair<WireId, WireId>, bool>> foundPaths;
     for (auto p : boundedCell->ports) {
         if (p.second.net == nullptr || p.second.type == PortType::PORT_IN)
@@ -263,29 +215,13 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
 
         for (auto user : outnet->users) {
             for (auto dstWire : ctx->getNetinfoSinkWires(outnet, user)) {
-                // if (ctx->getWireFlags(dstWire) < ctx->getWireFlags(srcWire)) {
-                //     if (explain_invalid) {
-                //         log_info("Invalid bel %s for cell %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
-                //         log_info("   src wire: %s\n", ctx->nameOfWire(srcWire));
-                //         log_info("   dest wire: %s\n", ctx->nameOfWire(dstWire));
-                //     }
-                //     return false;
-                // }
                 auto src_dst = std::make_pair(srcWire, dstWire);
                 if (pathCache.count(src_dst)) {
-                    if (explain_invalid) {
-                        pathCacheExplain[std::make_pair(srcWire, dstWire)] =
-                                pathCache.at(std::make_pair(srcWire, dstWire));
-                    }
                     foundPaths.push_back(std::make_pair(src_dst, pathCache.at(src_dst)));
                     continue;
                 }
                 bool result = have_path(srcWire, dstWire);
                 foundPaths.push_back(std::make_pair(src_dst, result));
-                if (explain_invalid) {
-                    pathCacheExplain[src_dst] = result;
-                }
-                newPath = true;
             }
         }
     }
@@ -296,13 +232,12 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
     //     return false;
     // }
     
-    for (const auto &elem : foundPaths) {
-        if (!elem.second) {
+    for (const auto &[wirePair, havePath] : foundPaths) {
+        if (!havePath) {
             if (explain_invalid) {
-                for (auto p : pathCacheExplain) {
-                    log_info("   %s -> %s : %s\n", ctx->nameOfWire(p.first.first), ctx->nameOfWire(p.first.second),
-                            p.second ? "true" : "false");
-                }
+                log_info("No valid routing path for bel %s with cell %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
+                log_info("   %s -> %s : %s\n", ctx->nameOfWire(wirePair.first), ctx->nameOfWire(wirePair.second),
+                        havePath ? "true" : "false");
             }
             return false;
         }

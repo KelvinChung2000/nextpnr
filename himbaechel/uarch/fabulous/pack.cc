@@ -26,7 +26,6 @@ struct FABulousPacker
         remove_fabulous_iob();
         // h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC,
         // id_GND);
-
         fold_bit_const();
         fold_clock_drive();
         remove_undrive_constant();
@@ -331,6 +330,9 @@ struct FABulousPacker
             return;
         }
 
+        if (a->cluster != ClusterId() && b->cluster != ClusterId())
+            return;
+
         // if (a->cluster != ClusterId() && b->cluster != ClusterId()) {
         //     // both a and b is in a cluster
         //     CellInfo *a_root = ctx->getClusterRootCell(a->cluster);
@@ -393,6 +395,10 @@ struct FABulousPacker
             // b is part of a cluster
             NPNR_ASSERT(a->constr_children.empty());
             CellInfo *root = ctx->getClusterRootCell(b->cluster);
+            if (get_macro_cell_z(b) - dz < 0){
+                log_info("Skipping constraint: cell %s is already at the bottom of the cluster\n", ctx->nameOf(b));
+                return;
+            }
             root->constr_children.push_back(a);
             a->cluster = root->cluster;
             a->constr_x = b->constr_x;
@@ -403,6 +409,10 @@ struct FABulousPacker
         } else if (!b->constr_children.empty()) {
             // b is a parent cell
             NPNR_ASSERT(a->constr_children.empty());
+            if (get_macro_cell_z(b) - dz < 0){
+                log_info("Skipping constraint: cell %s is already at the bottom of the cluster\n", ctx->nameOf(b));
+                return;
+            }
             b->constr_children.push_back(a);
             a->cluster = b->cluster;
             a->constr_x = 0;
