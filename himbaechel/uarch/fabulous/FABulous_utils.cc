@@ -113,4 +113,35 @@ bool FABulousUtils::is_tile_internal_bel_pin(BelId bel, IdString port) const
     return flag == Bel_pin_flag_POD::FLAG_INTERNAL;
 }
 
+std::vector<PackingRule> FABulousUtils::get_packing_rules() const
+{
+    std::vector<PackingRule> rules;
+    const Chip_extra_data_POD *extra = reinterpret_cast<const Chip_extra_data_POD *>(ctx->chip_info->extra_data.get());
+
+    log_info("Packing rules found: %ld\n", extra->packingRules.size());
+    for (const Packing_rule_POD &rule : extra->packingRules) {
+
+        PackingRule packingRule;
+        packingRule.base_z = rule.base_z;
+        packingRule.rel_x = rule.rel_x;
+        packingRule.rel_y = rule.rel_y;
+        packingRule.rel_z = rule.rel_z;
+        packingRule.flag = rule.flag;
+        if (rule.width > 1) {
+            for (int i = 0; i < rule.width; i++) {
+                auto driver_port = IdString(rule.driver.port).c_str(ctx);
+                auto user_port = IdString(rule.user.port).c_str(ctx);
+                packingRule.driver = CellTypePort(IdString(rule.driver.bel_type), ctx->idf("%s[%d]", driver_port, i));
+                packingRule.user = CellTypePort(IdString(rule.user.bel_type), ctx->idf("%s[%d]", user_port, i));
+                rules.push_back(packingRule);
+            }
+        } else {
+            packingRule.driver = CellTypePort(IdString(rule.driver.bel_type), IdString(rule.driver.port));
+            packingRule.user = CellTypePort(IdString(rule.user.bel_type), IdString(rule.user.port));
+            rules.push_back(packingRule);
+        }
+    }
+    return rules;
+}
+
 NEXTPNR_NAMESPACE_END

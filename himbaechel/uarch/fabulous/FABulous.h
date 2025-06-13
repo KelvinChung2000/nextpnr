@@ -8,9 +8,28 @@
 
 NEXTPNR_NAMESPACE_BEGIN
 
+NPNR_PACKED_STRUCT(struct Cell_port_POD{
+    int32_t bel_type;
+    int32_t port;
+});
+
+NPNR_PACKED_STRUCT(struct Packing_rule_POD {
+    Cell_port_POD driver;
+    Cell_port_POD user;
+    int32_t width;
+    int32_t base_z;
+    int32_t rel_x;
+    int32_t rel_y;
+    int32_t rel_z;
+    int32_t flag;
+    static constexpr uint32_t BASE_RULE = 0x01; // base rule, no relative z
+    static constexpr uint32_t ABS_RULE =  0x02; // absolute rule, no relative x/y/z
+});
+
 NPNR_PACKED_STRUCT(struct Chip_extra_data_POD {
     int32_t context;
     int32_t realBelCount;
+    RelSlice<Packing_rule_POD> packingRules;
 });
 
 

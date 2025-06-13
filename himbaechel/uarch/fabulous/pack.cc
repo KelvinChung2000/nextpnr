@@ -18,8 +18,8 @@ namespace {
 struct FABulousPacker
 {
     Context *ctx;
-    std::string filename;
-    FABulousPacker(Context *ctx, const std::string &filename) : ctx(ctx), filename(filename) {}
+    std::vector<PackingRule> packingRules;
+    FABulousPacker(Context *ctx, std::vector<PackingRule> packingRules) : ctx(ctx), packingRules(packingRules) {}
 
     void pack()
     {
@@ -29,134 +29,168 @@ struct FABulousPacker
         fold_bit_const();
         fold_clock_drive();
         remove_undrive_constant();
-
-        std::string filename = ctx->settings[ctx->id("constrain-pair")].as_string();
-        log_info("Reading constrain pair file '%s'...\n", filename.c_str());
-
-        std::ifstream file(filename);
-        if (!file) {
-            log_error("Failed to open constrain pair file '%s'.\n", filename.c_str());
-        }
-
-        std::string line;
         int constrain_count = 0;
 
-        while (std::getline(file, line)) {
-            // Skip empty lines and comments
-            if (line.empty() || line[0] == '#')
-                continue;
+        for (PackingRule &rule : packingRules) {
+            for (auto &[net_name, net_info] : ctx->nets) {
+                if (net_info->driver.cell == nullptr)
+                    continue;
 
-            std::istringstream iss(line);
-            std::string src, src_wire, sink, sink_wire;
-            std::string delta_z;
-
-            if (iss >> src >> src_wire >> sink >> sink_wire >> delta_z) {
-                // Split cell1_spec into cell name and port name
-                size_t colon_pos1 = 0;
-                while (colon_pos1 < src.size() && src[colon_pos1] != ':') {
-                    colon_pos1++;
+                auto &dri_ci = *net_info->driver.cell;
+                if (CellTypePort(net_info->driver) != rule.driver) {
+                    // printf("Skipping net %s, driver %s does not match rule root %s\n", net_name.c_str(ctx),
+                    //        CellTypePort(net_info->driver).toString(ctx).c_str(), rule.root.toString(ctx).c_str());
+                    continue;
                 }
 
-                // Split cell2_spec into cell name and port name
-                size_t colon_pos2 = 0;
-                while (colon_pos2 < sink.size() && sink[colon_pos2] != ':') {
-                    colon_pos2++;
-                }
-
-                if (colon_pos1 == src.size() || colon_pos2 == sink.size()) {
-                    log_error("Invalid constraint format '%s %s', expected 'cellName:portName cellName:portName'.\n",
-                              src.c_str(), sink.c_str());
-                }
-
-                // Verify delta_z is a valid integer
-                if (delta_z.empty()) {
-                    log_error("Missing delta_z value for constraint '%s %s'.\n", src.c_str(), sink.c_str());
-                }
-                if (src_wire.empty() || sink_wire.empty()) {
-                    log_error("Missing wire name for constraint '%s %s'.\n", src.c_str(), sink.c_str());
-                }
-
-                int delta_z_val = std::stoi(delta_z);
-                int src_wire_count = std::stoi(src_wire);
-                int sink_wire_count = std::stoi(sink_wire);
-                pool<CellTypePort> main_cell_ports;
-                pool<CellTypePort> child_cell_ports;
-
-                IdString main_cell = ctx->id(src.substr(0, colon_pos1));
-                std::string main_cell_port = src.substr(colon_pos1 + 1);
-                std::vector<IdString> src_wires;
-                if (src_wire_count == 1) {
-                    src_wires.push_back(ctx->id(main_cell_port));
-                } else {
-                    for (int i = 0; i < src_wire_count; i++) {
-                        src_wires.push_back(ctx->id(main_cell_port + "[" + std::to_string(i) + "]"));
-                    }
-                }
-
-                for (IdString src_wire : src_wires) {
-                    main_cell_ports.insert(CellTypePort(main_cell, src_wire));
-                }
-
-                IdString child_cell = ctx->id(sink.substr(0, colon_pos2));
-                std::string child_cell_port = sink.substr(colon_pos2 + 1);
-                std::vector<IdString> sink_wires;
-                if (sink_wire_count == 1) {
-                    sink_wires.push_back(ctx->id(child_cell_port));
-                } else {
-                    for (int i = 0; i < sink_wire_count; i++) {
-                        sink_wires.push_back(ctx->id(child_cell_port + "[" + std::to_string(i) + "]"));
-                    }
-                }
-                for (IdString sink_wire : sink_wires) {
-                    child_cell_ports.insert(CellTypePort(child_cell, sink_wire));
-                }
-
-                for (auto &cell : ctx->cells) {
-                    auto &ci = *cell.second;
-
-                    // clock is special case and handle separately
-                    if (ci.type == id_CLK_DRV) {
-                        // for (auto &usr : ci.ports.at(ctx->id("CLK_O")).net->users){
-                        //     auto &usr_ci = *usr.cell;
-                        //     rel_constr_cells(&ci, &usr_ci, 0xFFFF - get_macro_cell_z(&ci));
-                        // }
-                        continue;
-                    }
-
-                    for (auto &port : ci.ports) {
-                        if (port.second.net == nullptr)
-                            continue;
-                        if (port.second.net->driver.cell == nullptr)
-                            continue;
-
-                        if (main_cell_ports.count(CellTypePort(ci.type, port.first))) {
-                            if (port.second.type == PORT_OUT) {
-                                for (auto &usr : port.second.net->users) {
-                                    auto &usr_ci = *usr.cell;
-                                    if (child_cell_ports.count(CellTypePort(usr_ci.type, usr.port))) {
-                                        rel_constr_cells(&ci, &usr_ci, delta_z_val);
-                                        constrain_count++;
-                                        break;
-                                    }
-                                }
-                            } else {
-                                auto &c = port.second.net->driver.cell;
-                                for (auto &dport : c->ports) {
-                                    if (child_cell_ports.count(CellTypePort(c->type, dport.first))) {
-                                        rel_constr_cells(&ci, c, delta_z_val);
-                                        constrain_count++;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                for (auto &user : net_info->users) {
+                    if (rule.driver == CellTypePort(net_info->driver) && rule.user == CellTypePort(user)) {
+                        auto &usr_ci = *user.cell;
+                        if (rel_constr_cells(&usr_ci, &dri_ci, rule))
+                            constrain_count++;
                     }
                 }
             }
         }
         log_info("Constrained %d pairs\n", constrain_count);
-        file.close();
     }
+
+    // void pack()
+    // {
+    //     remove_fabulous_iob();
+    //     // h.replace_constants(CellTypePort(id_VCC_DRV, id_VCC), CellTypePort(id_GND_DRV, id_GND), {}, {}, id_VCC,
+    //     // id_GND);
+    //     fold_bit_const();
+    //     fold_clock_drive();
+    //     remove_undrive_constant();
+
+    //     std::string filename = ctx->settings[ctx->id("constrain-pair")].as_string();
+    //     log_info("Reading constrain pair file '%s'...\n", filename.c_str());
+
+    //     std::ifstream file(filename);
+    //     if (!file) {
+    //         log_error("Failed to open constrain pair file '%s'.\n", filename.c_str());
+    //     }
+
+    //     std::string line;
+    //     int constrain_count = 0;
+
+    //     while (std::getline(file, line)) {
+    //         // Skip empty lines and comments
+    //         if (line.empty() || line[0] == '#')
+    //             continue;
+
+    //         std::istringstream iss(line);
+    //         std::string src, src_wire, sink, sink_wire;
+    //         std::string delta_z;
+
+    //         if (iss >> src >> src_wire >> sink >> sink_wire >> delta_z) {
+    //             // Split cell1_spec into cell name and port name
+    //             size_t colon_pos1 = 0;
+    //             while (colon_pos1 < src.size() && src[colon_pos1] != ':') {
+    //                 colon_pos1++;
+    //             }
+
+    //             // Split cell2_spec into cell name and port name
+    //             size_t colon_pos2 = 0;
+    //             while (colon_pos2 < sink.size() && sink[colon_pos2] != ':') {
+    //                 colon_pos2++;
+    //             }
+
+    //             if (colon_pos1 == src.size() || colon_pos2 == sink.size()) {
+    //                 log_error("Invalid constraint format '%s %s', expected 'cellName:portName cellName:portName'.\n",
+    //                           src.c_str(), sink.c_str());
+    //             }
+
+    //             // Verify delta_z is a valid integer
+    //             if (delta_z.empty()) {
+    //                 log_error("Missing delta_z value for constraint '%s %s'.\n", src.c_str(), sink.c_str());
+    //             }
+    //             if (src_wire.empty() || sink_wire.empty()) {
+    //                 log_error("Missing wire name for constraint '%s %s'.\n", src.c_str(), sink.c_str());
+    //             }
+
+    //             int delta_z_val = std::stoi(delta_z);
+    //             int src_wire_count = std::stoi(src_wire);
+    //             int sink_wire_count = std::stoi(sink_wire);
+    //             pool<CellTypePort> main_cell_ports;
+    //             pool<CellTypePort> child_cell_ports;
+
+    //             IdString main_cell = ctx->id(src.substr(0, colon_pos1));
+    //             std::string main_cell_port = src.substr(colon_pos1 + 1);
+    //             std::vector<IdString> src_wires;
+    //             if (src_wire_count == 1) {
+    //                 src_wires.push_back(ctx->id(main_cell_port));
+    //             } else {
+    //                 for (int i = 0; i < src_wire_count; i++) {
+    //                     src_wires.push_back(ctx->id(main_cell_port + "[" + std::to_string(i) + "]"));
+    //                 }
+    //             }
+
+    //             for (IdString src_wire : src_wires) {
+    //                 main_cell_ports.insert(CellTypePort(main_cell, src_wire));
+    //             }
+
+    //             IdString child_cell = ctx->id(sink.substr(0, colon_pos2));
+    //             std::string child_cell_port = sink.substr(colon_pos2 + 1);
+    //             std::vector<IdString> sink_wires;
+    //             if (sink_wire_count == 1) {
+    //                 sink_wires.push_back(ctx->id(child_cell_port));
+    //             } else {
+    //                 for (int i = 0; i < sink_wire_count; i++) {
+    //                     sink_wires.push_back(ctx->id(child_cell_port + "[" + std::to_string(i) + "]"));
+    //                 }
+    //             }
+    //             for (IdString sink_wire : sink_wires) {
+    //                 child_cell_ports.insert(CellTypePort(child_cell, sink_wire));
+    //             }
+
+    //             for (auto &cell : ctx->cells) {
+    //                 auto &ci = *cell.second;
+
+    //                 // clock is special case and handle separately
+    //                 if (ci.type == id_CLK_DRV) {
+    //                     // for (auto &usr : ci.ports.at(ctx->id("CLK_O")).net->users){
+    //                     //     auto &usr_ci = *usr.cell;
+    //                     //     rel_constr_cells(&ci, &usr_ci, 0xFFFF - get_macro_cell_z(&ci));
+    //                     // }
+    //                     continue;
+    //                 }
+
+    //                 for (auto &port : ci.ports) {
+    //                     if (port.second.net == nullptr)
+    //                         continue;
+    //                     if (port.second.net->driver.cell == nullptr)
+    //                         continue;
+
+    //                     if (main_cell_ports.count(CellTypePort(ci.type, port.first))) {
+    //                         if (port.second.type == PORT_OUT) {
+    //                             for (auto &usr : port.second.net->users) {
+    //                                 auto &usr_ci = *usr.cell;
+    //                                 if (child_cell_ports.count(CellTypePort(usr_ci.type, usr.port))) {
+    //                                     rel_constr_cells(&ci, &usr_ci, delta_z_val);
+    //                                     constrain_count++;
+    //                                     break;
+    //                                 }
+    //                             }
+    //                         } else {
+    //                             auto &c = port.second.net->driver.cell;
+    //                             for (auto &dport : c->ports) {
+    //                                 if (child_cell_ports.count(CellTypePort(c->type, dport.first))) {
+    //                                     rel_constr_cells(&ci, c, delta_z_val);
+    //                                     constrain_count++;
+    //                                     break;
+    //                                 }
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     log_info("Constrained %d pairs\n", constrain_count);
+    //     file.close();
+    // }
 
     void remove_undrive_constant()
     {
@@ -307,131 +341,90 @@ struct FABulousPacker
             return 0;
     }
 
-    void rel_constr_cells(CellInfo *a, CellInfo *b, int dz)
+    bool rel_constr_cells(CellInfo *a, CellInfo *b, PackingRule &rule)
     {
         NPNR_ASSERT(a != nullptr);
         NPNR_ASSERT(b != nullptr);
 
+        if (a->cluster == b->cluster && a->cluster != ClusterId() && b->cluster != ClusterId()) {
+            return false;
+        }
+
         // Check if b is already in a's constraint children, which would create a circular dependency
         if (std::find(a->constr_children.begin(), a->constr_children.end(), b) != a->constr_children.end()) {
 #if 0
-            log_info("Skipping constraint: cell %s is already a child of %s\n", 
-                    b->name.c_str(ctx), a->name.c_str(ctx));
+                    log_info("Skipping constraint: cell %s is already a child of %s\n",
+                            b->name.c_str(ctx), a->name.c_str(ctx));
 #endif
-            return;
+            return false;
         }
 
-        // Also check for the reverse relationship to prevent circular dependencies
-        if (std::find(b->constr_children.begin(), b->constr_children.end(), a) != b->constr_children.end()) {
-#if 0
-            log_info("Skipping constraint: cell %s is already a child of %s\n", 
-                    a->name.c_str(ctx), b->name.c_str(ctx));
-#endif
-            return;
+        if (a->cluster == ClusterId()) {
+            a->cluster = a->name;
+            a->constr_x = 0;
+            a->constr_y = 0;
+
+            if (rule.isBaseRule())
+                a->constr_z = rule.base_z;
+            else
+                a->constr_z = 0;
+
+            a->constr_abs_z = rule.isAbsoluteRule();
         }
 
-        if (a->cluster != ClusterId() && b->cluster != ClusterId())
-            return;
-
-        // if (a->cluster != ClusterId() && b->cluster != ClusterId()) {
-        //     // both a and b is in a cluster
-        //     CellInfo *a_root = ctx->getClusterRootCell(a->cluster);
-        //     CellInfo *b_root = ctx->getClusterRootCell(b->cluster);
-        //     if (ctx->getClusterRootCell(a->cluster) == a ||
-        //         (ctx->getClusterRootCell(a->cluster) != a && ctx->getClusterRootCell(b->cluster) != b)) {
-        //         // a is the root of the cluster
-        //         for (auto i : b_root->constr_children) {
-        //             a_root->constr_children.push_back(i);
-        //             i->cluster = a_root->cluster;
-        //             i->constr_x = a_root->constr_x;
-        //             i->constr_y = a_root->constr_y;
-        //             i->constr_z = (i->constr_z - get_macro_cell_z(b)) + get_macro_cell_z(a) + dz;
-        //             i->constr_abs_z = a_root->constr_abs_z;
-        //         }
-        //         b_root->constr_children.clear();
-        //         b->cluster = a_root->cluster;
-        //         b->constr_x = a->constr_x;
-        //         b->constr_y = a->constr_y;
-        //         b->constr_z = get_macro_cell_z(a) + dz;
-        //         b->constr_abs_z = a->constr_abs_z;
-        //         if (ctx->getClusterRootCell(a->cluster) == a && ctx->getClusterRootCell(a->cluster) == a)
-        //             log_info("Packed cluster %s into cluster %s\n", ctx->nameOf(b->cluster), ctx->nameOf(a->cluster));
-        //         else
-        //             log_info("Packed cluster %s into cluster %s as %s is part of %s\n", ctx->nameOf(b_root),
-        //                      ctx->nameOf(a->cluster), ctx->nameOf(b), ctx->nameOf(b_root));
-        //     } else if (ctx->getClusterRootCell(b->cluster) == b) {
-        //         // b is the root of the cluster
-        //         for (auto i : a_root->constr_children) {
-        //             b_root->constr_children.push_back(i);
-        //             i->cluster = b_root->cluster;
-        //             i->constr_x = b_root->constr_x;
-        //             i->constr_y = b_root->constr_y;
-        //             i->constr_z = (i->constr_z - get_macro_cell_z(a)) + get_macro_cell_z(b) + dz;
-        //             i->constr_abs_z = b_root->constr_abs_z;
-        //         }
-        //         a_root->constr_children.clear();
-        //         a->cluster = a_root->cluster;
-        //         a->constr_x = b->constr_x;
-        //         a->constr_y = b->constr_y;
-        //         a->constr_z = get_macro_cell_z(b) + dz;
-        //         a->constr_abs_z = b->constr_abs_z;
-        //         log_info("Packed cluster %s into cluster %s\n", ctx->nameOf(a_root), ctx->nameOf(b_root));
-        //     }
-
-        // }
-        if (a->cluster != ClusterId() && ctx->getClusterRootCell(a->cluster) != a) {
-            // a is part of a cluster
-            NPNR_ASSERT(b->cluster == ClusterId());
-            NPNR_ASSERT(b->constr_children.empty());
+        if (b->cluster == ClusterId()) {
+            NPNR_ASSERT(a->cluster != ClusterId());
             CellInfo *root = ctx->getClusterRootCell(a->cluster);
             root->constr_children.push_back(b);
             b->cluster = root->cluster;
-            b->constr_x = a->constr_x;
-            b->constr_y = a->constr_y;
-            b->constr_z = get_macro_cell_z(a) + dz;
-            b->constr_abs_z = a->constr_abs_z;
-            log_info("Packed cell %s into cell %s via %s (z=%d)\n", ctx->nameOf(b), ctx->nameOf(root), ctx->nameOf(a), b->constr_z);
-        } else if (b->cluster != ClusterId() && ctx->getClusterRootCell(b->cluster) != b) {
-            // b is part of a cluster
-            NPNR_ASSERT(a->constr_children.empty());
-            CellInfo *root = ctx->getClusterRootCell(b->cluster);
-            if (get_macro_cell_z(b) - dz < 0){
-                log_info("Skipping constraint: cell %s is already at the bottom of the cluster\n", ctx->nameOf(b));
-                return;
+            if (rule.isAbsoluteRule()) {
+                b->constr_x = rule.rel_x;
+                b->constr_y = rule.rel_y;
+                b->constr_z = rule.rel_z;
+                b->constr_abs_z = true;
+            } else {
+                if (root == a){
+                    b->constr_x = rule.rel_x;
+                    b->constr_y = rule.rel_y;
+                    b->constr_z = rule.rel_z;
+                    b->constr_abs_z = false;
+                }
+                else{
+                    b->constr_x = root->constr_x + rule.rel_x;
+                    b->constr_y = root->constr_y + rule.rel_y;
+                    b->constr_z = (b->constr_z - get_macro_cell_z(b)) + get_macro_cell_z(a) + rule.rel_z;
+                    b->constr_abs_z = false;
+                }
+
             }
-            root->constr_children.push_back(a);
-            a->cluster = root->cluster;
-            a->constr_x = b->constr_x;
-            a->constr_y = b->constr_y;
-            a->constr_z = get_macro_cell_z(b) - dz;
-            a->constr_abs_z = b->constr_abs_z;
-            log_info("Packed cell %s into cell %s via %s (z=%d)\n", ctx->nameOf(a), ctx->nameOf(root), ctx->nameOf(b), a->constr_z);
-        } else if (!b->constr_children.empty()) {
-            // b is a parent cell
-            NPNR_ASSERT(a->constr_children.empty());
-            if (get_macro_cell_z(b) - dz < 0){
-                log_info("Skipping constraint: cell %s is already at the bottom of the cluster\n", ctx->nameOf(b));
-                return;
-            }
-            b->constr_children.push_back(a);
-            a->cluster = b->cluster;
-            a->constr_x = 0;
-            a->constr_y = 0;
-            a->constr_z = get_macro_cell_z(b) - dz;
-            a->constr_abs_z = b->constr_abs_z;
-            log_info("Packed cell %s into cell %s (z=%d)\n", ctx->nameOf(a), ctx->nameOf(b), a->constr_z);
-        } else {
-            // a is a parent cell or both cells are not part of a cluster
-            NPNR_ASSERT(a->cluster == ClusterId() || ctx->getClusterRootCell(a->cluster) == a);
-            a->constr_children.push_back(b);
-            a->cluster = a->name;
-            b->cluster = a->name;
-            b->constr_x = 0;
-            b->constr_y = 0;
-            b->constr_z = get_macro_cell_z(a) + dz;
-            b->constr_abs_z = a->constr_abs_z;
-            log_info("Packed cell %s into cell %s (z=%d)\n", ctx->nameOf(b), ctx->nameOf(a), b->constr_z);
-        }
+            log_info("Root z is %d, rule rel_z is %d, so b->constr_z is %d\n", get_macro_cell_z(root),
+            rule.rel_z, b->constr_z);
+            log_info("Constrained cell %s to cluster root %s (z=%d) with Rule: \n%s\n\n", b->name.c_str(ctx),
+                     root->name.c_str(ctx), b->constr_z, rule.toString(ctx).c_str());
+        } 
+        // else {
+        //     NPNR_ASSERT(b->cluster != ClusterId());
+        //     CellInfo *root = ctx->getClusterRootCell(a->cluster);
+        //     CellInfo *b_root = ctx->getClusterRootCell(b->cluster);
+        //     if (root->constr_abs_z) {
+        //         return false;
+        //     }
+
+        //     for (auto i : b_root->constr_children) {
+        //         root->constr_children.push_back(i);
+        //         i->cluster = root->cluster;
+        //         i->constr_x = root->constr_x + rule.rel_x;
+        //         i->constr_y = root->constr_y + rule.rel_y;
+        //         i->constr_z = (i->constr_z - get_macro_cell_z(b)) + get_macro_cell_z(a) + rule.rel_z;
+        //         log_info("Relocating child %s of cluster %s to cluster root %s z=%d\n\n", i->name.c_str(ctx),
+        //                  b_root->name.c_str(ctx), root->name.c_str(ctx), i->constr_z);
+        //         i->constr_abs_z = false;
+        //     }
+        //     b_root->constr_children.clear();
+        //     log_info("Constrained cluster %s to cluster root %s with Rule: \n%s\n\n", b_root->name.c_str(ctx),
+        //              root->name.c_str(ctx), rule.toString(ctx).c_str());
+        // }
+        return true;
     }
 };
 } // namespace
@@ -441,7 +434,7 @@ void FABulousImpl::pack()
 
     for (auto &cell : ctx->cells) {
         auto &ci = *cell.second;
-        if (ci.type.in(ctx->id("INBUF"), ctx->id("OUTBUF"))){
+        if (ci.type.in(ctx->id("INBUF"), ctx->id("OUTBUF"))) {
             NetInfo *i = ci.getPort(ctx->id("I"));
             if (i && i->driver.cell) {
                 if (!ioBufTypes.count(i->driver.cell->type))
@@ -451,7 +444,7 @@ void FABulousImpl::pack()
 
             NetInfo *o = ci.getPort(ctx->id("O"));
             if (o) {
-                for (auto &usr : o->users){
+                for (auto &usr : o->users) {
                     if (!ioBufTypes.count(usr.cell->type))
                         log_info("Detected cell type %s is an IO type cell\n", usr.cell->type.c_str(ctx));
                     ioBufTypes.insert(usr.cell->type);
@@ -459,7 +452,7 @@ void FABulousImpl::pack()
             }
         }
     }
-
+    log_break();
     if (ctx->settings.count(ctx->id("fdc.filename"))) {
         if (!fdc_apply(ctx, ctx->settings[ctx->id("fdc.filename")].as_string()))
             log_error("Fail to apply FABulous Design Constrain");
@@ -504,7 +497,7 @@ void FABulousImpl::pack()
     // }
 
     if (ctx->settings.count(ctx->id("constrain-pair"))) {
-        FABulousPacker packer(ctx, ctx->settings[ctx->id("constrain-pair")].as_string());
+        FABulousPacker packer(ctx, fu.get_packing_rules());
         packer.pack();
     }
 }

@@ -553,6 +553,8 @@ void CommandHandler::setupContext(Context *ctx)
 
     if (vm.count("placer-heap-seed-placement-strategy"))
         ctx->settings[ctx->id("placerHeap/seedPlacementStrategy")] = vm["placer-heap-seed-placement-strategy"].as<std::string>();
+    else
+        ctx->settings[ctx->id("placerHeap/seedPlacementStrategy")] = std::string("random");
 
     if (vm.count("placer-heap-max-hops"))
         ctx->settings[ctx->id("placerHeap/maxHops")] =

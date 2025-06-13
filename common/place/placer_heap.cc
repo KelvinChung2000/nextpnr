@@ -166,6 +166,7 @@ class HeAPPlacer
         }
 
         update_all_chains();
+        update_congestion();
         if (cfg.exportInitPlacement != "")
             write_init_placement(cfg.exportInitPlacement);
         wirelen_t hpwl = total_hpwl();
@@ -186,6 +187,7 @@ class HeAPPlacer
             solve_time += std::chrono::duration<double>(solve_endt - solve_startt).count();
 
             update_all_chains();
+            update_congestion();
 
             hpwl = total_hpwl();
             log_info("    at initial placer iter %d, wirelen = %d\n", i, int(hpwl));
@@ -257,9 +259,11 @@ class HeAPPlacer
                 auto solve_endt = std::chrono::high_resolution_clock::now();
                 solve_time += std::chrono::duration<double>(solve_endt - solve_startt).count();
                 update_all_chains();
+                update_congestion();
                 solved_hpwl = total_hpwl();
 
                 update_all_chains();
+                update_congestion();
 
                 // Run the spreader
                 for (const auto &group : cfg.cellGroups)
@@ -272,9 +276,11 @@ class HeAPPlacer
 
                 // Run strict legalisation to find a valid bel for all cells
                 update_all_chains();
+                update_congestion();
                 spread_hpwl = total_hpwl();
                 legalise_placement_strict(true);
                 update_all_chains();
+                update_congestion();
 
                 legal_hpwl = total_hpwl();
                 auto run_stopt = std::chrono::high_resolution_clock::now();
@@ -428,6 +434,10 @@ class HeAPPlacer
     // The adjacency graph of the netlist
     dict<IdString, std::vector<CellInfo *>> adj;
 
+    // Congestion map, used to track congestion over the fabric
+    dict<std::pair<int, int>, int> congestion_map;
+    double congestion_vmr = 0.0;
+
     // The cells in the current equation being solved (a subset of place_cells in some cases, where we only place
     // cells of a certain type)
     std::vector<CellInfo *> solve_cells;
@@ -437,58 +447,70 @@ class HeAPPlacer
     // Performance counting
     double solve_time = 0, cl_time = 0, sl_time = 0;
 
+    // Store the search result for bel connectivity to avoid recomputing it
+    dict<std::pair<WireId, WireId>, int> belConnectivityCache;
+    mutable std::shared_mutex belConnectivityCacheMutex;
+
     int get_wire_hops(WireId start_wire, WireId end_wire)
     {
         if (start_wire == WireId() || end_wire == WireId()) {
-            return -1; // Invalid wires
+            return std::numeric_limits<int>::max(); // Invalid wires
         }
         if (start_wire == end_wire) {
             return 0; // Same wire
         }
 
-        if (cfg.belConnectivityCache.count({start_wire, end_wire})) {
-            return cfg.belConnectivityCache[{start_wire, end_wire}];
+        {
+            std::shared_lock<std::shared_mutex> readLock(belConnectivityCacheMutex);
+            if (belConnectivityCache.count({start_wire, end_wire})) {
+                return belConnectivityCache[{start_wire, end_wire}];
+            }
         }
-        
-        std::queue<std::pair<WireId, int>> q; // Use std::queue for BFS
-        q.push({start_wire, 0});
+
+        // Perform BFS to find shortest path
+        std::queue<std::pair<WireId, int>> q;
+        q.emplace(start_wire, 0);
         pool<WireId> visited;
-        visited.insert(start_wire); // Mark start_wire as visited when pushed
+        visited.insert(start_wire);
+
+        int result = std::numeric_limits<int>::max(); // Default: no path found
 
         while (!q.empty()) {
-            WireId current_wire = q.front().first;
-            int current_hops = q.front().second;
+            auto [current_wire, current_hops] = q.front();
             q.pop();
 
             if (current_wire == end_wire) {
-                cfg.belConnectivityCache[{start_wire, end_wire}] = current_hops;
-                return current_hops;
+                result = current_hops;
+                break;
             }
 
             if (current_hops >= cfg.maxHops) {
-                cfg.belConnectivityCache[{start_wire, end_wire}] = cfg.maxHops;
-                return cfg.maxHops; // Stop exploring if max_hops is reached
+                result = cfg.maxHops;
+                break;
             }
 
-            // Explore downhill PIPs
+            // Explore downstream connections
             for (PipId pip : ctx->getPipsDownhill(current_wire)) {
                 WireId next_wire = ctx->getPipDstWire(pip);
                 if (next_wire != WireId() && !visited.count(next_wire)) {
-                    visited.insert(next_wire); // Mark visited when pushed
-                    q.push({next_wire, current_hops + 1});
-                }
-            }
-            // Explore uphill PIPs
-            for (PipId pip : ctx->getPipsUphill(current_wire)) {
-                WireId prev_wire = ctx->getPipSrcWire(pip);
-                if (prev_wire != WireId() && !visited.count(prev_wire)) {
-                    visited.insert(prev_wire); // Mark visited when pushed
-                    q.push({prev_wire, current_hops + 1});
+                    visited.insert(next_wire);
+                    q.emplace(next_wire, current_hops + 1);
                 }
             }
         }
-        cfg.belConnectivityCache[{start_wire, end_wire}] = -1;
-        return -1; // No path found
+
+        // Cache the result with thread safety
+        {
+            std::unique_lock<std::shared_mutex> writeLock(belConnectivityCacheMutex);
+            auto it = belConnectivityCache.find({start_wire, end_wire});
+            if (it == belConnectivityCache.end()) {
+                belConnectivityCache[{start_wire, end_wire}] = result;
+            } else {
+                result = it->second; // Another thread computed it first
+            }
+        }
+
+        return result;
     }
 
     // Calculate average PIP hop distance from cell_to_place (at candidate_bel) to its connected, already placed
@@ -500,59 +522,43 @@ class HeAPPlacer
 
         auto valid_loc = [&](const Loc &loc) { return loc.x >= 0 && loc.y >= 0 && loc.z >= 0; };
 
-        for (auto p : cell_to_place->ports) {
-            if (p.second.net == nullptr)
-                continue;
-
-            auto pin_wire = ctx->getBelPinWire(candidate_bel, p.first);
-            if (p.second.type == PORT_IN) {
-                auto driver_cell = p.second.net->driver.cell;
-                if (driver_cell == nullptr || driver_cell->isPseudo())
-                    continue;
-                Loc bel_loc(cell_locs[driver_cell->name].x, cell_locs[driver_cell->name].y,
-                            cell_locs[driver_cell->name].z);
-
-                if (!valid_loc(bel_loc)) {
-                    continue; // Skip invalid locations
-                }
-                auto driver_bel = ctx->getBelByLocation(bel_loc);
-
-                if (driver_bel == BelId() || !ctx->isValidBelForCellType(driver_cell->type, driver_bel)) {
-                    // No valid BEL found for the driver cell. Skip.
-                    continue;
-                }
-
-                WireId wire_on_driver_bel = ctx->getBelPinWire(driver_bel, p.second.net->driver.port);
-                if (wire_on_driver_bel != WireId()) {
-                    int hops = get_wire_hops(wire_on_driver_bel, pin_wire);
-                    if (hops != -1) {
-                        cumulative_hops += hops*2;
-                        connected_placed_neighbors++;
+        for (auto &nb : adj[cell_to_place->name]) {
+            Loc bel_loc(cell_locs[nb->name].x, cell_locs[nb->name].y, cell_locs[nb->name].z);
+            if (!valid_loc(bel_loc)) {
+                continue; // Skip invalid locations
+            }
+            BelId nb_bel = ctx->getBelByLocation(bel_loc);
+            std::vector<std::pair<PortRef, PortRef>> port_pairs;
+            for (auto &[net_name, net_info] : ctx->nets) {
+                for (auto &user : net_info->users) {
+                    // all the downstream nb
+                    if (net_info->driver.cell == cell_to_place && user.cell == nb) {
+                        port_pairs.emplace_back(std::make_pair(net_info->driver, user));
+                    }
+                    // all the upstream nb
+                    if (user.cell == cell_to_place && net_info->driver.cell == nb) {
+                        port_pairs.emplace_back(std::make_pair(user, net_info->driver));
                     }
                 }
             }
-            if (p.second.type == PORT_OUT) {
-                for (auto user : p.second.net->users) {
-                    Loc bel_loc(cell_locs[user.cell->name].x, cell_locs[user.cell->name].y,
-                                cell_locs[user.cell->name].z);
 
-                    if (!valid_loc(bel_loc)) {
-                        continue; // Skip invalid locations
-                    }
-                    auto user_bel = ctx->getBelByLocation(bel_loc);
+            for (auto &[p1, p2] : port_pairs) {
+                WireId src_wire, dst_wire;
+                if (p1.cell == nb) {
+                    src_wire = ctx->getBelPinWire(nb_bel, p1.port);
+                    dst_wire = ctx->getBelPinWire(candidate_bel, p2.port);
+                } else {
+                    src_wire = ctx->getBelPinWire(candidate_bel, p1.port);
+                    dst_wire = ctx->getBelPinWire(nb_bel, p2.port);
+                }
+                if (src_wire == WireId() || dst_wire == WireId()) {
+                    continue; // Skip invalid wires
+                }
 
-                    if (user_bel == BelId() || !ctx->isValidBelForCellType(user.cell->type, user_bel)) {
-                        continue;
-                    }
-
-                    WireId wire_on_user_bel = ctx->getBelPinWire(user_bel, user.port);
-                    if (wire_on_user_bel != WireId()) {
-                        int hops = get_wire_hops(pin_wire, wire_on_user_bel);
-                        if (hops != -1) {
-                            cumulative_hops += hops;
-                            connected_placed_neighbors++;
-                        }
-                    }
+                int hops = get_wire_hops(src_wire, dst_wire);
+                if (hops != -1) {
+                    cumulative_hops += hops;
+                    connected_placed_neighbors++;
                 }
             }
         }
@@ -670,13 +676,13 @@ class HeAPPlacer
             if (ni->driver.cell == nullptr || ni->users.empty() || ni->driver.cell->isPseudo())
                 continue;
             IdString driver_name = ni->driver.cell->name;
-            adj[driver_name];
+            auto &d = adj[driver_name];
             for (auto &user_ref : ni->users) {
                 if (user_ref.cell->isPseudo())
                     continue;
                 IdString user_name = user_ref.cell->name;
-                if (driver_name != user_name) {
-                    adj[driver_name].push_back(user_ref.cell);
+                if (driver_name != user_name && std::find(d.begin(), d.end(), user_ref.cell) == d.end()) {
+                    d.push_back(user_ref.cell);
                 }
             }
         }
@@ -998,23 +1004,48 @@ class HeAPPlacer
             IdString name;
             CellInfo *cell_info;
             bool is_io;
-            bool is_neighbor_of_placed;
-            int connectivity_score; // Out-degree
-            int bel_resource_score;
+            // bool is_neighbor_of_placed; // Original field
+            bool is_locked_self; // True if this cell itself is locked by a BEL attribute or other constraint
+            bool has_placed_or_locked_neighbor; // True if connected to an already placed/locked cell (at the time of
+                                                // candidate creation)
+            int connectivity_score;             // Out-degree (number of distinct cells it drives)
+            int bel_resource_score;             // Number of available BELs for this cell type
+            int num_constraint_children;        // Number of constrained children (macro size)
 
-            // Custom comparison for sorting
+            // Custom comparison for sorting (lower value/true means higher priority)
             bool operator<(const SeedCandidate &other) const
             {
-                if (is_io != other.is_io) {
-                    return is_io; // I/O cells should come first
+                // Priority 1: Cells that are part of larger macros (more children first)
+                if (num_constraint_children != other.num_constraint_children) {
+                    return num_constraint_children > other.num_constraint_children;
                 }
-                if (is_neighbor_of_placed != other.is_neighbor_of_placed) {
-                    return is_neighbor_of_placed; // true (is neighbor) should come before false
+                // Priority 2: Cells that are themselves locked (e.g., by BEL attribute)
+                if (is_locked_self != other.is_locked_self) {
+                    return is_locked_self; // true (is locked) comes before false
                 }
+                // Priority 3: Cells connected to already placed/locked neighbors
+                if (has_placed_or_locked_neighbor != other.has_placed_or_locked_neighbor) {
+                    return has_placed_or_locked_neighbor; // true comes before false
+                }
+                // Priority 4: Higher connectivity score (out-degree)
                 if (connectivity_score != other.connectivity_score) {
-                    return connectivity_score > other.connectivity_score; // Higher is better
+                    return connectivity_score > other.connectivity_score;
                 }
-                return bel_resource_score > other.bel_resource_score; // Higher is better
+                // Priority 5: Higher BEL resource score (more placement options for this cell type)
+                return bel_resource_score > other.bel_resource_score;
+                // Priority 6: I/O cells
+                if (is_io != other.is_io) {
+                    return is_io; // true (is I/O) comes before false
+                }
+            }
+
+            std::string to_string(Context *ctx_ptr) const // Renamed ctx to ctx_ptr to avoid conflict
+            {
+                return std::string(name.str(ctx_ptr)) + " (children: " + std::to_string(num_constraint_children) +
+                       ", is_io: " + std::to_string(is_io) + ", is_locked_self: " + std::to_string(is_locked_self) +
+                       ", has_placed_neighbor: " + std::to_string(has_placed_or_locked_neighbor) +
+                       ", conn_score: " + std::to_string(connectivity_score) +
+                       ", bel_score: " + std::to_string(bel_resource_score) + ")";
             }
         };
 
@@ -1025,18 +1056,20 @@ class HeAPPlacer
         for (auto &cell : ctx->cells) {
             auto ci = cell.second.get();
 
+            if (ci->isPseudo())
+                continue; // Skip pseudo cells early
+
             // skip if is part of a cluster and is not the root
             if (ci->cluster != ClusterId() && ctx->getClusterRootCell(ci->cluster) != ci) {
                 continue;
             }
 
-            // out degree
             int out_degree = adj.count(ci->name) ? adj.at(ci->name).size() : 0;
 
-            // bel resource availability
             int bel_score = 0;
             FastBels::FastBelsData *fb_data_ptr = nullptr;
-            if (fast_bels.getBelsForCellType(ci->name, &fb_data_ptr) && fb_data_ptr != nullptr) {
+            // Use ci->type for getBelsForCellType
+            if (fast_bels.getBelsForCellType(ci->type, &fb_data_ptr) && fb_data_ptr != nullptr) {
                 const FastBels::FastBelsData &bels_for_type = *fb_data_ptr;
                 for (const auto &x_slice : bels_for_type) {
                     for (const auto &y_slice : x_slice) {
@@ -1049,15 +1082,31 @@ class HeAPPlacer
                 }
             }
 
-            log_info("Candidate: %s, Type: %s, Out-degree: %d, BEL score: %d is_io: %d\n", ci->name.c_str(ctx),
-                     ci->type.c_str(ctx), out_degree, bel_score, cfg.ioBufTypes.count(cell.second->type) > 0);
+            bool current_cell_is_locked = cell_locs.at(ci->name).locked;
+            int constraint_children_count = ci->constr_children.size();
+            bool cell_has_neighbor_already_locked = false;
 
-            candidates.push_back({ci->name, ci, cfg.ioBufTypes.count(cell.second->type) > 0, cell_locs.at(ci->name).locked,
-                                  out_degree, bel_score});
+            if (adj.count(ci->name)) {
+                for (CellInfo *neighbor_cell : adj.at(ci->name)) {
+                    if (cell_locs.count(neighbor_cell->name) && cell_locs.at(neighbor_cell->name).locked) {
+                        cell_has_neighbor_already_locked = true;
+                        break;
+                    }
+                }
+            }
+
+            candidates.push_back({ci->name, ci, cfg.ioBufTypes.count(ci->type) > 0, current_cell_is_locked,
+                                  cell_has_neighbor_already_locked, out_degree, bel_score, constraint_children_count});
         }
 
         // Sort candidates based on the defined priorities
         std::sort(candidates.begin(), candidates.end());
+
+        if (ctx->debug) {
+            for (auto c : candidates) {
+                log_info("Candidate: %s\n", c.to_string(ctx).c_str());
+            }
+        }
 
         // Iteratively place cells using BFS-like approach with sparseness heuristic
         int max_search_radius = std::max(max_x, max_y) / 2 + 5;
@@ -1163,14 +1212,16 @@ class HeAPPlacer
                                     // Score: lower is better.
                                     // We want low distance (pip_hop_dist or Manhattan) and high sparseness (many free
                                     // neighbors).
-                                    int score = actual_distance - sparseness * sparseness_weight_factor;
+                                    // int score = actual_distance - sparseness * sparseness_weight_factor;
+                                    int score = actual_distance;
                                     // int score = value_to_square * value_to_square;
 
                                     if (score < best_score) {
                                         if (ctx->debug)
-                                            log_info("Current Best: Cell %s, BEL %s, score %d, distance %d, sparseness %d, pip_hop %d\n\n",
-                                                    current_ci->name.c_str(ctx), ctx->nameOfBel(bel), score,
-                                                    actual_distance, sparseness, pip_hop_dist);
+                                            log_info("Current Best: Cell %s, BEL %s, score %d, distance %d, sparseness "
+                                                     "%d, pip_hop %d\n\n",
+                                                     current_ci->name.c_str(ctx), ctx->nameOfBel(bel), score,
+                                                     actual_distance, sparseness, pip_hop_dist);
                                         best_score = score;
                                         best_bel_for_current = bel;
                                         best_loc_for_current = current_bel_loc;
@@ -1209,6 +1260,8 @@ class HeAPPlacer
                 cell_locs[candidate.name].locked = true;
             } else {
                 place_cells.push_back(current_ci);
+                log_info("Placed cell '%s' at (%d, %d) with BEL '%s'\n", current_ci->name.c_str(ctx),
+                         best_loc_for_current.x, best_loc_for_current.y, ctx->nameOfBel(best_bel_for_current));
             }
             log_break();
         }
@@ -1253,6 +1306,123 @@ class HeAPPlacer
                 }
             }
         }
+    }
+
+    std::vector<std::pair<int, int>> get_route_estimate(CellInfo *src, CellInfo *dst)
+    {
+        std::vector<std::pair<int, int>> route;
+        if (src == nullptr || dst == nullptr)
+            return route;
+
+        int x1 = cell_locs[src->name].x, y1 = cell_locs[src->name].y;
+        int x2 = cell_locs[dst->name].x, y2 = cell_locs[dst->name].y;
+
+        if (x1 == -1 || y1 == -1 || x2 == -1 || y2 == -1)
+            return route;
+
+        // log_info("Estimating route from %s (%d, %d) to %s (%d, %d)\n", ctx->nameOf(src), x1, y1, ctx->nameOf(dst),
+        // x2, y2);
+
+        if (x1 == x2) {
+            for (int y = std::min(y1, y2); y <= std::max(y1, y2); y++)
+                route.emplace_back(x1, y);
+            return route;
+        }
+
+        if (y1 == y2) {
+            for (int x = std::min(x1, x2); x <= std::max(x1, x2); x++)
+                route.emplace_back(x, y1);
+            return route;
+        }
+
+        int dx = std::abs(x2 - x1);
+        int dy = std::abs(y2 - y1);
+        int sx = (x1 < x2) ? 1 : -1;
+        int sy = (y1 < y2) ? 1 : -1;
+        int err = dx - dy;
+        // log_info("map size: %d\n", congestion_map.size());
+        while (true) {
+            // log_info("Adding point (%d, %d) to route\n", x1, y1);
+            route.emplace_back(x1, y1);
+            if (x1 == x2 && y1 == y2)
+                break;
+            int e2 = 2 * err;
+            if (e2 > -dy) {
+                err -= dy;
+                x1 += sx;
+            }
+            if (e2 < dx) {
+                err += dx;
+                y1 += sy;
+            }
+        }
+        return route;
+    }
+
+    double compute_vmr(dict<std::pair<int, int>, int> val_map)
+    {
+        double averageCongestion = 0.0;
+        double vmr = 0.0;
+        if (val_map.empty()) {
+            vmr = 0.0; // Neutral or indicates no congestion
+            averageCongestion = 0.0;
+            if (ctx->debug)
+                log_info("Congestion map is empty, VMR set to %.2f\n", vmr);
+            return vmr;
+        }
+
+        double sum = 0.0;
+        for (auto const &[_, val] : val_map) {
+            sum += val;
+        }
+
+        averageCongestion = sum / val_map.size();
+
+        if (averageCongestion == 0) {
+            vmr = 0.0;
+            if (ctx->debug)
+                log_info("Average congestion is zero, VMR set to 0.0\n");
+            return vmr;
+        }
+
+        double variance_sum = 0.0;
+        for (auto const &[_, val] : val_map) {
+            variance_sum += (val - averageCongestion) * (val - averageCongestion);
+        }
+        double variance = variance_sum / val_map.size();
+        vmr = variance / averageCongestion;
+        return vmr;
+    }
+
+    // update the congestion map based
+    void update_congestion()
+    {
+        congestion_map.clear();
+
+        if (ctx->debug)
+            log_info("Updating congestion map...\n");
+
+        for (auto &net : ctx->nets) {
+            NetInfo *ni = net.second.get();
+            if (ni->driver.cell == nullptr || ni->users.empty())
+                continue;
+
+            for (auto &user : ni->users) {
+                auto route = get_route_estimate(ni->driver.cell, user.cell);
+                for (auto &point : route) {
+                    if (congestion_map.count({point.first, point.second}) == 0) {
+                        congestion_map[{point.first, point.second}] = 0;
+                    }
+                    congestion_map[{point.first, point.second}]++;
+                }
+            }
+        }
+
+        if (ctx->debug)
+            for (auto &i : congestion_map) {
+                log_info("Congestion at (%d, %d): %d\n", i.first.first, i.first.second, i.second);
+            }
+        congestion_vmr = compute_vmr(congestion_map);
     }
 
     // Run a function on all ports of a net - including the driver and all users
@@ -1323,28 +1493,96 @@ class HeAPPlacer
                     if (other == &port)
                         return;
                     int o_pos = cell_pos(other->cell);
-                    double weight = 1.0 / (ni->users.entries() *
-                                           std::max<double>(1, (yaxis ? cfg.hpwl_scale_y : cfg.hpwl_scale_x) *
-                                                                       std::abs(o_pos - this_pos)));
-
-                    if (user_idx) {
-                        weight *= (1.0 + cfg.timingWeight * std::pow(tmg.get_criticality(CellPortKey(port)),
-                                                                     cfg.criticalityExponent));
+                    double raw_dist = std::abs(o_pos - this_pos);
+                    double hpwl_scale = yaxis ? cfg.hpwl_scale_y : cfg.hpwl_scale_x;
+                    double num_users = ni->users.entries();
+                    double weight = 1.0 / (num_users * std::max<double>(1, hpwl_scale * raw_dist));
+#if 0
+                    if (ctx->debug) {
+                        log_info("Arc %s:%s -> %s:%s\n", ctx->nameOf(port.cell), ctx->nameOf(port.port),
+                                 ctx->nameOf(other->cell), ctx->nameOf(other->port));
+                        log_info("  HPWL Base Weight: %.4f (users: %f, dist: %.1f, scale: %.2f)\n", weight, num_users,
+                                 raw_dist, hpwl_scale);
                     }
-
-                    if (cfg.archConnectivityFactor){
+#endif
+                    if (cfg.archConnectivityFactor) {
                         CellInfo *this_cell = port.cell;
                         CellInfo *other_cell = other->cell;
 
-                        if (this_cell->bel != BelId() && other_cell->bel != BelId()) {
-                            WireId this_wire = ctx->getBelPinWire(this_cell->bel, port.port);
-                            WireId other_wire = ctx->getBelPinWire(other_cell->bel, other->port);
-                            // inverse connectivity factor
-                            // log_info("%lf\n ", cfg.archConnectivityFactor / std::max(double(get_wire_hops(this_wire, other_wire)), 1.0));
-                            weight *= 1.0 + (cfg.archConnectivityFactor / std::max(double(get_wire_hops(this_wire, other_wire)), 1.0));
+                        Loc this_loc = Loc(cell_locs.at(this_cell->name).x, cell_locs.at(this_cell->name).y,
+                                           cell_locs.at(this_cell->name).z);
+
+                        Loc other_loc = Loc(cell_locs.at(other_cell->name).x, cell_locs.at(other_cell->name).y,
+                                            cell_locs.at(other_cell->name).z);
+                        auto loc_valid = [&](Loc l) { return l.x >= 0 && l.y >= 0 && l.z >= 0; };
+
+                        if (loc_valid(this_loc) && loc_valid(other_loc)) {
+                            BelId this_bel = ctx->getBelByLocation(this_loc);
+                            BelId other_bel = ctx->getBelByLocation(other_loc);
+
+                            if (this_bel != BelId() && other_bel != BelId()) {
+                                WireId this_wire = ctx->getBelPinWire(this_bel, port.port);
+                                WireId other_wire = ctx->getBelPinWire(other_bel, other->port);
+                                int wire_hops = get_wire_hops(this_wire, other_wire);
+                                double arch_mult = 1.0;
+                                if (wire_hops == std::numeric_limits<int>::max()) {
+                                    arch_mult = 0.0;
+                                } else {
+                                    arch_mult = 1.0 + cfg.archConnectivityFactor / std::max(double(wire_hops), 1.0);
+                                }
+                                weight *= arch_mult;
+#if 0
+                                if (ctx->debug) {
+                                    log_info("  Arch mult: %.4f (hops: %d)\n", arch_mult, wire_hops);
+                                }
+#endif
+                            }
                         }
                     }
 
+                    if (cfg.congestionAwareFactor) {
+                        CellInfo *this_cell = port.cell;
+                        CellInfo *other_cell = other->cell;
+                        int congestion_score = 0;
+                        double congestion_mult = 1.0;
+
+                        auto congestion_map_clone = congestion_map;
+                        for (auto const &loc : get_route_estimate(this_cell, other_cell)) {
+                            congestion_map_clone[{loc.first, loc.second}]++;
+                        }
+
+                        auto new_vmr = compute_vmr(congestion_map_clone);
+                        double vmr_change = (new_vmr - congestion_vmr) / std::max(congestion_vmr, 1e-6);
+
+                        // square root damping
+                        double damped_change = std::sqrt(std::min(4.0, std::max(0.0, vmr_change)));
+                        congestion_mult = 1.0 + cfg.congestionAwareFactor * damped_change;
+
+                        weight *= congestion_mult;
+#if 0
+                        if (ctx->debug) {
+                            log_info("  Congestion mult: %.4f (congestion score: %d, VMR: %.2f)\n", congestion_mult,
+                                     congestion_score, congestion_vmr);
+                        }
+#endif
+                    }
+
+                    if (user_idx) {
+                        double criticality = tmg.get_criticality(CellPortKey(port));
+                        double timing_multiplier =
+                                (1.0 + cfg.timingWeight * std::pow(criticality, cfg.criticalityExponent));
+                        weight *= timing_multiplier;
+#if 0
+                        if (ctx->debug) {
+                            log_info("  Timing mult: %.4f (criticality: %.4f)\n", timing_multiplier, criticality);
+                        }
+#endif
+                    }
+#if 0
+                    if (ctx->debug) {
+                        log_info("  Final Weight: %.4f\n", weight);
+                    }
+#endif
                     // If cell 0 is not fixed, it will stamp +w on its equation and -w on the other end's equation,
                     // if the other end isn't fixed
                     stamp_equation(port, port, weight);
@@ -1485,6 +1723,14 @@ class HeAPPlacer
                         if (cell.second->bel != BelId())
                             log_info("    %s: %s\n", cell.first.c_str(ctx), ctx->nameOfBel(cell.second->bel));
                     }
+                    if (ci->cluster != ClusterId()) {
+                        log_info("This is a clustered cell:\n");
+                        log_info("  Root: %s\n", ctx->nameOf(ctx->getClusterRootCell(ci->cluster)));
+                        log_info("  with constrain children:\n");
+                        for (auto &child : ci->constr_children) {
+                            log_info("    %s (z=%d)\n", child->name.c_str(ctx), child->constr_z);
+                        }
+                    }
                     log_error("Unable to find legal placement for cell '%s' of type '%s' after %d attempts, check "
                               "constraints and "
                               "utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of "
@@ -1588,7 +1834,7 @@ class HeAPPlacer
                             }
                             // Provisionally bind the bel
                             ctx->bindBel(sz, ci, STRENGTH_WEAK);
-                            // log_info("      tring binding %s to %s\n", ctx->nameOf(ci), ctx->nameOfBel(sz));
+                            log_info("      tring binding %s to %s\n", ctx->nameOf(ci), ctx->nameOfBel(sz));
                             if (require_validity && !ctx->isBelLocationValid(sz, cfg.debug)) {
                                 // log_info("      binding %s to %s is illegal\n", ctx->nameOf(ci), ctx->nameOfBel(sz));
                                 // New location is not legal; unbind the cell (and rebind the cell we ripped up if
@@ -1674,6 +1920,8 @@ class HeAPPlacer
                         fail:
                             // If the move turned out to be illegal; revert all the moves we made
                             for (auto &swap : swaps_made) {
+                                log_info("      Reverting Bel %s on %s\n", ctx->nameOfBel(swap.first),
+                                         ctx->nameOf(swap.second));
                                 ctx->unbindBel(swap.first);
                                 if (swap.second != nullptr)
                                     ctx->bindBel(swap.first, swap.second, STRENGTH_WEAK);
@@ -2422,6 +2670,7 @@ PlacerHeapCfg::PlacerHeapCfg(Context *ctx)
     parallelRefine = ctx->setting<bool>("placerHeap/parallelRefine", false);
     netShareWeight = ctx->setting<float>("placerHeap/netShareWeight", 0);
     archConnectivityFactor = ctx->setting<double>("placerHeap/archConnectivityFactor", 0.0);
+    congestionAwareFactor = ctx->setting<double>("placerHeap/congestionAwareFactor", 1.0);
     maxHops = ctx->setting<int>("placerHeap/maxHops", 15);
 
     // Set seed placement strategy based on settings

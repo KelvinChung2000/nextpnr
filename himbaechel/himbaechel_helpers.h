@@ -50,6 +50,11 @@ struct CellTypePort
     }
     inline unsigned hash() const { return mkhash(cell_type.hash(), port.hash()); }
     IdString cell_type, port;
+
+    std::string toString(BaseCtx *ctx) const
+    {
+        return "CellTypePort { cell_type: " + cell_type.str(ctx) + ", port: " + port.str(ctx) + " }";
+    }
 };
 
 struct HimbaechelHelpers

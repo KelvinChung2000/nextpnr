@@ -28,6 +28,7 @@
 #define PLACER_HEAP_H
 #include "log.h"
 #include "nextpnr.h"
+#include <shared_mutex>
 
 NEXTPNR_NAMESPACE_BEGIN
 
@@ -54,6 +55,7 @@ struct PlacerHeapCfg
     bool parallelRefine;
     int cell_placement_timeout;
     double archConnectivityFactor;
+    double congestionAwareFactor;
     int maxHops;
     std::string legalisationStrategy;
     std::string exportInitPlacement;
@@ -71,8 +73,6 @@ struct PlacerHeapCfg
     // components) so will always be spread together
     std::vector<pool<BelBucketId>> cellGroups;
 
-    // Store the search result for bel connectivity to avoid recomputing it
-    dict<std::pair<WireId, WireId>, int> belConnectivityCache;
 };
 
 extern bool placer_heap(Context *ctx, PlacerHeapCfg cfg);
