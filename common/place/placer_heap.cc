@@ -517,7 +517,7 @@ class HeAPPlacer
     // neighbors
     int calculate_pip_hop_distance(CellInfo *cell_to_place, BelId candidate_bel)
     {
-        long long cumulative_hops = 0;
+        int cumulative_hops = 0;
         int connected_placed_neighbors = 0;
 
         auto valid_loc = [&](const Loc &loc) { return loc.x >= 0 && loc.y >= 0 && loc.z >= 0; };
@@ -528,6 +528,10 @@ class HeAPPlacer
                 continue; // Skip invalid locations
             }
             BelId nb_bel = ctx->getBelByLocation(bel_loc);
+            if (nb_bel == BelId()) {
+                continue; // Skip if no BEL at location
+            }
+            
             std::vector<std::pair<PortRef, PortRef>> port_pairs;
             for (auto &[net_name, net_info] : ctx->nets) {
                 for (auto &user : net_info->users) {
@@ -556,7 +560,7 @@ class HeAPPlacer
                 }
 
                 int hops = get_wire_hops(src_wire, dst_wire);
-                if (hops != -1) {
+                if (hops >= 0 && hops != std::numeric_limits<int>::max()) {
                     cumulative_hops += hops;
                     connected_placed_neighbors++;
                 }
@@ -1019,24 +1023,28 @@ class HeAPPlacer
                 if (num_constraint_children != other.num_constraint_children) {
                     return num_constraint_children > other.num_constraint_children;
                 }
-                // Priority 2: Cells that are themselves locked (e.g., by BEL attribute)
-                if (is_locked_self != other.is_locked_self) {
-                    return is_locked_self; // true (is locked) comes before false
-                }
-                // Priority 3: Cells connected to already placed/locked neighbors
-                if (has_placed_or_locked_neighbor != other.has_placed_or_locked_neighbor) {
-                    return has_placed_or_locked_neighbor; // true comes before false
-                }
-                // Priority 4: Higher connectivity score (out-degree)
-                if (connectivity_score != other.connectivity_score) {
-                    return connectivity_score > other.connectivity_score;
-                }
-                // Priority 5: Higher BEL resource score (more placement options for this cell type)
-                return bel_resource_score > other.bel_resource_score;
-                // Priority 6: I/O cells
+                // Priority 2: I/O cells first (moved up for better constraint handling)
                 if (is_io != other.is_io) {
                     return is_io; // true (is I/O) comes before false
                 }
+                // Priority 3: Cells that are themselves locked (e.g., by BEL attribute)
+                if (is_locked_self != other.is_locked_self) {
+                    return is_locked_self; // true (is locked) comes before false
+                }
+                // Priority 4: Cells connected to already placed/locked neighbors
+                if (has_placed_or_locked_neighbor != other.has_placed_or_locked_neighbor) {
+                    return has_placed_or_locked_neighbor; // true comes before false
+                }
+                // Priority 5: Higher connectivity score (out-degree)
+                if (connectivity_score != other.connectivity_score) {
+                    return connectivity_score > other.connectivity_score;
+                }
+                // Priority 6: Fewer available BELs (more constrained cells first)
+                if (bel_resource_score != other.bel_resource_score) {
+                    return bel_resource_score < other.bel_resource_score;
+                }
+                // Final tiebreaker: lexicographic by name for determinism
+                return name < other.name;
             }
 
             std::string to_string(Context *ctx_ptr) const // Renamed ctx to ctx_ptr to avoid conflict
@@ -1108,9 +1116,8 @@ class HeAPPlacer
             }
         }
 
-        // Iteratively place cells using BFS-like approach with sparseness heuristic
+        // Iteratively place cells using BFS-like approach with adaptive sparseness heuristic
         int max_search_radius = std::max(max_x, max_y) / 2 + 5;
-        int sparseness_weight_factor = 1;
 
         auto calculate_sparseness_metric = [&](int cx, int cy,
                                                const pool<std::pair<int, int>> &current_occupied_grids) {
@@ -1133,17 +1140,38 @@ class HeAPPlacer
             return free_neighbors;
         };
 
-        for (auto candidate : candidates) {
-            CellInfo *current_ci = candidate.cell_info;
+        // Calculate adaptive sparseness weight based on cell characteristics
+        auto calculate_adaptive_sparseness_weight = [&](const SeedCandidate &candidate) {
+            double base_weight = 0.1; // Low weight for seeding phase
+            
+            // Reduce sparseness influence for I/O cells (they have location constraints)
+            if (candidate.is_io) {
+                return base_weight * 0.5;
+            }
+            
+            // Reduce sparseness influence for cells with many constraint children
+            if (candidate.num_constraint_children > 0) {
+                return base_weight * 0.3;
+            }
+            
+            // Reduce sparseness influence for highly connected cells
+            if (candidate.connectivity_score > 5) {
+                return base_weight * 0.7;
+            }
+            
+            return base_weight;
+        };
 
-            Loc cog(0, 0, 0);
+        // Calculate center of gravity for a cell based on its connected placed neighbors
+        auto calculate_center_of_gravity = [&](IdString cell_name) {
+            Loc cog(max_x / 2, max_y / 2, 0);
             int placed_neighbors_count = 0;
-            if (adj.count(candidate.name)) {
-                for (auto neighbor_cell : adj.at(candidate.name)) {
-                    // Consider neighbors that are either pre-locked or already placed by this seed algorithm
+            
+            if (adj.count(cell_name)) {
+                for (auto neighbor_cell : adj.at(cell_name)) {
                     auto neighbor_name = neighbor_cell->name;
                     if (cell_locs.at(neighbor_name).locked || placed_cell_to_bel_map.count(neighbor_name)) {
-                        if (cell_locs.at(neighbor_name).x != -1) { // Ensure neighbor has a valid location
+                        if (cell_locs.at(neighbor_name).x != -1) {
                             cog.x += cell_locs.at(neighbor_name).x;
                             cog.y += cell_locs.at(neighbor_name).y;
                             placed_neighbors_count++;
@@ -1155,29 +1183,60 @@ class HeAPPlacer
             if (placed_neighbors_count > 0) {
                 cog.x /= placed_neighbors_count;
                 cog.y /= placed_neighbors_count;
-            } else {
-                cog.x = max_x / 2; // Target chip center if no placed neighbors
-                cog.y = max_y / 2;
             }
-            cog.x = std::max(0, std::min(max_x, cog.x)); // Clamp COG
+            
+            // Clamp COG to valid bounds
+            cog.x = std::max(0, std::min(max_x, cog.x));
             cog.y = std::max(0, std::min(max_y, cog.y));
+            return cog;
+        };
+
+        // Calculate comprehensive BEL score combining multiple factors
+        auto calculate_bel_score = [&](CellInfo *ci, BelId bel, Loc cog, 
+                                      const pool<std::pair<int, int>> &occupied_grids,
+                                      double sparseness_weight) {
+            Loc current_bel_loc = ctx->getBelLocation(bel);
+            
+            // Base connectivity score
+            double pip_hop_dist = double(calculate_pip_hop_distance(ci, bel));
+            double connectivity_score;
+            
+            if (pip_hop_dist > 0 && pip_hop_dist < std::numeric_limits<double>::max()) {
+                connectivity_score = pip_hop_dist;
+            } else {
+                // Fallback to Manhattan distance if no PIP hop info available
+                connectivity_score = std::abs(current_bel_loc.x - cog.x) + 
+                                   std::abs(current_bel_loc.y - cog.y);
+            }
+            
+            // Sparseness bonus (adaptive weight)
+            int sparseness = calculate_sparseness_metric(current_bel_loc.x, current_bel_loc.y, occupied_grids);
+            double sparseness_bonus = sparseness * sparseness_weight;
+            
+            // Lower score is better: connectivity_score - sparseness_bonus
+            return connectivity_score - sparseness_bonus;
+        };
+
+        for (auto candidate : candidates) {
+            CellInfo *current_ci = candidate.cell_info;
+
+            // Calculate center of gravity based on placed neighbors
+            Loc cog = calculate_center_of_gravity(candidate.name);
+            
+            // Calculate adaptive sparseness weight for this candidate
+            double adaptive_sparseness_weight = calculate_adaptive_sparseness_weight(candidate);
 
             BelId best_bel_for_current = BelId();
             Loc best_loc_for_current;
-            int best_score = std::numeric_limits<int>::max();
+            double best_score = std::numeric_limits<double>::max();
             bool found_bel_for_this_cell = false;
 
             FastBels::FastBelsData *fb_data;
             if (fast_bels.getBelsForCellType(current_ci->type, &fb_data)) {
-                // for (auto &x_slice : *fb_data) {
-                //     for (auto &y_slice : x_slice) {
-                //         ctx->shuffle(y_slice.begin(), y_slice.end());
-                //     }
-                // }
-
+                // Multi-radius search with early termination when good candidates found
                 for (int r = 0; r < max_search_radius && !found_bel_for_this_cell; ++r) {
-                    // Stop if best in radius found
                     bool candidate_found_in_current_radius = false;
+                    
                     for (int dx = -r; dx <= r; ++dx) {
                         for (int dy = -r; dy <= r; ++dy) {
                             if (r > 0 && (std::abs(dx) < r && std::abs(dy) < r))
@@ -1193,49 +1252,40 @@ class HeAPPlacer
 
                             for (BelId bel : fb_data->at(nx).at(ny)) {
                                 if (ctx->checkBelAvail(bel) && !bels_used.count(bel)) {
-                                    Loc current_bel_loc = ctx->getBelLocation(bel);
-
-                                    int actual_distance;
-                                    int pip_hop_dist = calculate_pip_hop_distance(current_ci, bel);
-
-                                    if (pip_hop_dist <= 0) {
-                                        // Fallback to Manhattan distance from CoG if no connected placed neighbors or
-                                        // error in PIP calculation
-                                        actual_distance = std::abs(current_bel_loc.x - cog.x) +
-                                                          std::abs(current_bel_loc.y - cog.y);
-                                    } else {
-                                        actual_distance = pip_hop_dist;
-                                    }
-
-                                    int sparseness = calculate_sparseness_metric(current_bel_loc.x, current_bel_loc.y,
-                                                                                 occupied_seed_grids);
-                                    // Score: lower is better.
-                                    // We want low distance (pip_hop_dist or Manhattan) and high sparseness (many free
-                                    // neighbors).
-                                    // int score = actual_distance - sparseness * sparseness_weight_factor;
-                                    int score = actual_distance;
-                                    // int score = value_to_square * value_to_square;
+                                    // Use improved scoring function
+                                    double score = calculate_bel_score(current_ci, bel, cog, 
+                                                                     occupied_seed_grids,
+                                                                     adaptive_sparseness_weight);
 
                                     if (score < best_score) {
-                                        if (ctx->debug)
-                                            log_info("Current Best: Cell %s, BEL %s, score %d, distance %d, sparseness "
-                                                     "%d, pip_hop %d\n\n",
+                                        if (ctx->debug) {
+                                            Loc current_bel_loc = ctx->getBelLocation(bel);
+                                            int sparseness = calculate_sparseness_metric(current_bel_loc.x, current_bel_loc.y,
+                                                                                        occupied_seed_grids);
+                                            double pip_hop_dist = calculate_pip_hop_distance(current_ci, bel);
+                                            log_info("Best candidate: Cell %s, BEL %s, score %.2f, pip_hop %.2f, sparseness %d, weight %.2f\n",
                                                      current_ci->name.c_str(ctx), ctx->nameOfBel(bel), score,
-                                                     actual_distance, sparseness, pip_hop_dist);
+                                                     pip_hop_dist, sparseness, adaptive_sparseness_weight);
+                                        }
                                         best_score = score;
                                         best_bel_for_current = bel;
-                                        best_loc_for_current = current_bel_loc;
+                                        best_loc_for_current = ctx->getBelLocation(bel);
                                         candidate_found_in_current_radius = true;
                                     }
                                 }
                             }
                         }
                     }
-                    if (candidate_found_in_current_radius) {
-                        // If we found *any* candidate in this radius that improved best_score
-                        // We will use the best one found so far and stop expanding radius
+                    
+                    // Early termination: if we found good candidates at this radius, stop expanding
+                    if (candidate_found_in_current_radius && r >= 1) {
                         found_bel_for_this_cell = true;
                     }
+                }
+                
+                // If we found a BEL but haven't set the flag yet, set it now
+                if (best_bel_for_current != BelId()) {
+                    found_bel_for_this_cell = true;
                 }
             }
 
@@ -1244,6 +1294,7 @@ class HeAPPlacer
                           current_ci->name.c_str(ctx), current_ci->type.c_str(ctx));
             }
 
+            // Place the cell
             cell_locs[candidate.name].x = best_loc_for_current.x;
             cell_locs[candidate.name].y = best_loc_for_current.y;
             cell_locs[candidate.name].z = best_loc_for_current.z;
@@ -1260,10 +1311,13 @@ class HeAPPlacer
                 cell_locs[candidate.name].locked = true;
             } else {
                 place_cells.push_back(current_ci);
-                log_info("Placed cell '%s' at (%d, %d) with BEL '%s'\n", current_ci->name.c_str(ctx),
-                         best_loc_for_current.x, best_loc_for_current.y, ctx->nameOfBel(best_bel_for_current));
+                if (ctx->debug) {
+                    log_info("Placed cell '%s' at (%d, %d) with BEL '%s', score %.2f\n", 
+                             current_ci->name.c_str(ctx),
+                             best_loc_for_current.x, best_loc_for_current.y, 
+                             ctx->nameOfBel(best_bel_for_current), best_score);
+                }
             }
-            log_break();
         }
     }
 
