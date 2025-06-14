@@ -460,12 +460,12 @@ class HeAPPlacer
             return 0; // Same wire
         }
 
-        {
-            std::shared_lock<std::shared_mutex> readLock(belConnectivityCacheMutex);
-            if (belConnectivityCache.count({start_wire, end_wire})) {
-                return belConnectivityCache[{start_wire, end_wire}];
-            }
-        }
+        // {
+        //     std::shared_lock<std::shared_mutex> readLock(belConnectivityCacheMutex);
+        //     if (belConnectivityCache.count({start_wire, end_wire})) {
+        //         return belConnectivityCache[{start_wire, end_wire}];
+        //     }
+        // }
 
         // Perform BFS to find shortest path
         std::queue<std::pair<WireId, int>> q;
@@ -500,15 +500,15 @@ class HeAPPlacer
         }
 
         // Cache the result with thread safety
-        {
-            std::unique_lock<std::shared_mutex> writeLock(belConnectivityCacheMutex);
-            auto it = belConnectivityCache.find({start_wire, end_wire});
-            if (it == belConnectivityCache.end()) {
-                belConnectivityCache[{start_wire, end_wire}] = result;
-            } else {
-                result = it->second; // Another thread computed it first
-            }
-        }
+        // {
+        //     std::unique_lock<std::shared_mutex> writeLock(belConnectivityCacheMutex);
+        //     auto it = belConnectivityCache.find({start_wire, end_wire});
+        //     if (it == belConnectivityCache.end()) {
+        //         belConnectivityCache[{start_wire, end_wire}] = result;
+        //     } else {
+        //         result = it->second; // Another thread computed it first
+        //     }
+        // }
 
         return result;
     }
@@ -2724,7 +2724,7 @@ PlacerHeapCfg::PlacerHeapCfg(Context *ctx)
     parallelRefine = ctx->setting<bool>("placerHeap/parallelRefine", false);
     netShareWeight = ctx->setting<float>("placerHeap/netShareWeight", 0);
     archConnectivityFactor = ctx->setting<double>("placerHeap/archConnectivityFactor", 0.0);
-    congestionAwareFactor = ctx->setting<double>("placerHeap/congestionAwareFactor", 1.0);
+    congestionAwareFactor = ctx->setting<double>("placerHeap/congestionAwareFactor", 0.0);
     maxHops = ctx->setting<int>("placerHeap/maxHops", 15);
 
     // Set seed placement strategy based on settings

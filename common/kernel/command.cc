@@ -395,6 +395,8 @@ po::options_description CommandHandler::getGeneralOptions()
                           "seed placement strategy for heap placer (options: random, random_bfs, greedy, default: random)");
     general.add_options()("placer-heap-arch-connectivity-factor", po::value<double>(),
                           "factor for architecture connectivity aware placement (default: 0.0)");
+    general.add_options()("placer-heap-congestion-aware-factor", po::value<double>(),
+                          "factor for congestion aware placement (default: 1.0)");
     general.add_options()("placer-heap-max-hops", po::value<int>(),
                           "maximum depth of hop search for architecture connectivity aware placement (default: 15)");
 
@@ -563,6 +565,10 @@ void CommandHandler::setupContext(Context *ctx)
     if (vm.count("placer-heap-arch-connectivity-factor"))
         ctx->settings[ctx->id("placerHeap/archConnectivityFactor")] =
                 std::to_string(vm["placer-heap-arch-connectivity-factor"].as<double>());
+
+    if (vm.count("placer-heap-congestion-aware-factor"))
+        ctx->settings[ctx->id("placerHeap/congestionAwareFactor")] =
+                std::to_string(vm["placer-heap-congestion-aware-factor"].as<double>());
 
     if (vm.count("parallel-refine"))
         ctx->settings[ctx->id("placerHeap/parallelRefine")] = true;
