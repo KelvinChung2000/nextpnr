@@ -16,10 +16,10 @@
 #define HIMBAECHEL_CONSTIDS "uarch/fabulous/constids.inc"
 #include "himbaechel_constids.h"
 
+#include <jsonwrite.h>
 #include "FABulous.h"
 #include "FABulous_utils.h"
 #include "router1.h"
-#include <jsonwrite.h>
 
 NEXTPNR_NAMESPACE_BEGIN
 
@@ -94,7 +94,6 @@ void FABulousImpl::init(Context *ctx)
         }
         log("\n");
     }
-
 }
 
 void FABulousImpl::assign_resource_shared()
@@ -175,7 +174,92 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
         }
     }
 
-    for (auto [port_name, port_info]: boundedCell->ports) {
+    // Check if current bel is IO type and validate IO connectivity
+    if (ioBufTypes.count(boundedCell->type)) {
+
+        // Find all other placed IO cells and check if current IO can reach them
+        std::vector<CellInfo *> otherIoCells;
+
+        // Collect all other placed IO cells
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            if (ci != boundedCell && ioBufTypes.count(ci->type) && ci->bel != BelId() &&
+                boundedCell->type == ci->type) {
+                otherIoCells.push_back(ci);
+            }
+        }
+
+        // Check connectivity to each other IO cell
+        for (CellInfo *ioCell : otherIoCells) {
+            BelId ioBel = ioCell->bel;
+            bool canReachIoCell = true;
+
+            // Try all combinations of ports between current IO and target IO
+            for (auto [currentPortName, currentPortInfo] : boundedCell->ports) {
+                if (currentPortInfo.net == nullptr)
+                    continue;
+
+                if (currentPortInfo.type != PortType::PORT_OUT)
+                    continue;
+
+                WireId currentIoWire = WireId();
+                // Get wire for current bel port
+                for (auto belPin : ctx->getBelPins(bel)) {
+                    if (belPin == currentPortName) {
+                        currentIoWire = ctx->getBelPinWire(bel, belPin);
+                        break;
+                    }
+                }
+
+                if (currentIoWire == WireId())
+                    continue;
+
+                // Check against all ports of the target IO cell
+                for (auto [targetPortName, targetPortInfo] : ioCell->ports) {
+                    if (targetPortInfo.net == nullptr)
+                        continue;
+
+                    if (targetPortInfo.type != PortType::PORT_IN)
+                        continue;
+
+                    WireId targetIoWire = WireId();
+                    // Get wire for target IO bel port
+                    for (auto targetBelPin : ctx->getBelPins(ioBel)) {
+                        if (targetBelPin == targetPortName) {
+                            targetIoWire = ctx->getBelPinWire(ioBel, targetBelPin);
+                            break;
+                        }
+                    }
+
+                    if (targetIoWire == WireId())
+                        continue;
+
+                    // Check if there's a routing path between the IO wires
+                    if (have_path(currentIoWire, targetIoWire)) {
+                        canReachIoCell = true;
+                        break;
+                    }
+                    canReachIoCell = false;
+                }
+
+                if (canReachIoCell)
+                    break;
+            }
+
+            // If we cannot reach this IO cell from any port combination, placement is invalid
+            if (!canReachIoCell) {
+                if (explain_invalid) {
+                    log_info("IO bel %s cannot reach other IO bel %s through routing fabric\n", ctx->nameOfBel(bel),
+                             ctx->nameOfBel(ioBel));
+                    log_info("   Current IO cell: %s\n", ctx->nameOf(boundedCell));
+                    log_info("   Target IO cell: %s\n", ctx->nameOf(ioCell));
+                }
+                return false;
+            }
+        }
+    }
+
+    for (auto [port_name, port_info] : boundedCell->ports) {
         if (port_info.net == nullptr)
             continue;
         if (ioBufTypes.count(boundedCell->type))
@@ -196,32 +280,55 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
 
     // bel can connect to external
     std::vector<std::pair<std::pair<WireId, WireId>, bool>> foundPaths;
-    for (auto p : boundedCell->ports) {
-        if (p.second.net == nullptr || p.second.type == PortType::PORT_IN)
+
+    for (auto &[port_name, port_info] : boundedCell->ports) {
+        if (port_info.net == nullptr)
             continue;
 
-        NetInfo *outnet = p.second.net;
-        WireId srcWire = ctx->getNetinfoSourceWire(outnet);
-        if (srcWire == WireId()) {
-            // return true;
-            // log_info("outnet %s\n", outnet->name.c_str(ctx));
-            log_warning("No source wire for net %s at port %s\n", ctx->nameOf(outnet), ctx->nameOf(p.first));
-            for (auto user : outnet->users) {
-                log_warning("   user %s : %s\n", ctx->nameOf(user.cell), ctx->nameOf(user.port));
+        if (port_info.type == PortType::PORT_IN) {
+            NetInfo *innet = port_info.net;
+            WireId srcWire = ctx->getNetinfoSourceWire(innet);
+            if (srcWire == WireId()) {
+                continue;
             }
-            log_error("A bel with no source wire %s. Maybe a database and synth lib miss match?\n",
-                      ctx->nameOfBel(bel));
+            WireId dstWire = ctx->getBelPinWire(bel, port_name);
+            if (dstWire == WireId()) {
+                log_error("A bel with no matching wire %s(%s). Maybe a database and synth lib miss match?\n",
+                          ctx->nameOfBel(bel), ctx->nameOf(port_name));
+            }
+            auto src_dst = std::make_pair(srcWire, dstWire);
+            if (pathCache.count(src_dst)) {
+                foundPaths.push_back(std::make_pair(src_dst, pathCache.at(src_dst)));
+                continue;
+            }
+            bool result = have_path(srcWire, dstWire);
+            foundPaths.push_back(std::make_pair(src_dst, result));
         }
 
-        for (auto user : outnet->users) {
-            for (auto dstWire : ctx->getNetinfoSinkWires(outnet, user)) {
-                auto src_dst = std::make_pair(srcWire, dstWire);
-                if (pathCache.count(src_dst)) {
-                    foundPaths.push_back(std::make_pair(src_dst, pathCache.at(src_dst)));
-                    continue;
+        if (port_info.type == PortType::PORT_OUT) {
+            NetInfo *outnet = port_info.net;
+            WireId srcWire = ctx->getNetinfoSourceWire(outnet);
+            if (srcWire == WireId()) {
+                // return true;
+                // log_info("outnet %s\n", outnet->name.c_str(ctx));
+                log_warning("No source wire for net %s at port %s\n", ctx->nameOf(outnet), ctx->nameOf(port_name));
+                for (auto user : outnet->users) {
+                    log_warning("   user %s : %s\n", ctx->nameOf(user.cell), ctx->nameOf(user.port));
                 }
-                bool result = have_path(srcWire, dstWire);
-                foundPaths.push_back(std::make_pair(src_dst, result));
+                log_error("A bel with no source wire %s. Maybe a database and synth lib miss match?\n",
+                          ctx->nameOfBel(bel));
+            }
+
+            for (auto user : outnet->users) {
+                for (auto dstWire : ctx->getNetinfoSinkWires(outnet, user)) {
+                    auto src_dst = std::make_pair(srcWire, dstWire);
+                    if (pathCache.count(src_dst)) {
+                        foundPaths.push_back(std::make_pair(src_dst, pathCache.at(src_dst)));
+                        continue;
+                    }
+                    bool result = have_path(srcWire, dstWire);
+                    foundPaths.push_back(std::make_pair(src_dst, result));
+                }
             }
         }
     }
@@ -231,13 +338,14 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
     //     }
     //     return false;
     // }
-    
+
     for (const auto &[wirePair, havePath] : foundPaths) {
         if (!havePath) {
             if (explain_invalid) {
-                log_info("No valid routing path for bel %s with cell %s\n", ctx->nameOfBel(bel), ctx->nameOf(boundedCell->name));
+                log_info("No valid routing path for bel %s with cell %s\n", ctx->nameOfBel(bel),
+                         ctx->nameOf(boundedCell->name));
                 log_info("   %s -> %s : %s\n", ctx->nameOfWire(wirePair.first), ctx->nameOfWire(wirePair.second),
-                        havePath ? "true" : "false");
+                         havePath ? "true" : "false");
             }
             return false;
         }
