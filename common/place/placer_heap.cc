@@ -1023,10 +1023,6 @@ class HeAPPlacer
                 if (num_constraint_children != other.num_constraint_children) {
                     return num_constraint_children > other.num_constraint_children;
                 }
-                // Priority 2: I/O cells first (moved up for better constraint handling)
-                if (is_io != other.is_io) {
-                    return is_io; // true (is I/O) comes before false
-                }
                 // Priority 3: Cells that are themselves locked (e.g., by BEL attribute)
                 if (is_locked_self != other.is_locked_self) {
                     return is_locked_self; // true (is locked) comes before false
@@ -1042,6 +1038,10 @@ class HeAPPlacer
                 // Priority 6: Fewer available BELs (more constrained cells first)
                 if (bel_resource_score != other.bel_resource_score) {
                     return bel_resource_score < other.bel_resource_score;
+                }
+                // Priority 2: I/O cells first (moved up for better constraint handling)
+                if (is_io != other.is_io) {
+                    return is_io; // true (is I/O) comes before false
                 }
                 // Final tiebreaker: lexicographic by name for determinism
                 return name < other.name;
@@ -1210,8 +1210,21 @@ class HeAPPlacer
             int sparseness = calculate_sparseness_metric(current_bel_loc.x, current_bel_loc.y, occupied_grids);
             double sparseness_bonus = sparseness * sparseness_weight;
 
+            int pin_count = ctx->getBelPins(bel).size();
+            int delay = 0;
+            for (auto i : ctx->getBelPins(bel)) {
+                WireId wire = ctx->getBelPinWire(bel, i);
+                if (wire == WireId())
+                    continue; // Skip invalid wires
+
+                for (auto pip : ctx->getPipsDownhill(wire)) {
+                    auto pip_delay = ctx->getPipDelay(pip);
+                    delay += (int(pip_delay.maxDelay()) + int(pip_delay.minDelay())) / 2;
+                }
+            }
+
             // Lower score is better: connectivity_score - sparseness_bonus
-            return connectivity_score - sparseness_bonus;
+            return (delay / pin_count) - connectivity_score - sparseness_bonus;
         };
 
         for (auto candidate : candidates) {

@@ -116,6 +116,12 @@ struct DelayPair
         max_delay -= rhs.max_delay;
         return *this;
     }
+    std::string to_string() const
+    {
+        std::ostringstream oss;
+        oss << "DelayPair(min_delay=" << min_delay << ", max_delay=" << max_delay << ")";
+        return oss.str();
+    }
 };
 
 // four-quadrant, min and max rise and fall delay
@@ -154,6 +160,12 @@ struct DelayQuad
         rise -= rhs.rise;
         fall -= rhs.fall;
         return *this;
+    }
+
+    std::string to_string(){
+        std::ostringstream oss;
+        oss << "DelayQuad(rise=" << rise.to_string() << ", fall=" << fall.to_string() << ")";
+        return oss.str();
     }
 };
 
