@@ -7,6 +7,9 @@ set(SOURCES
     FABulous_utils.h
     FABulous_utils.cc
     pack.cc
+    validity_check.h
+    validity_check.cc
+    checker.cc
     drawing.cc
     fdc.cc
 )

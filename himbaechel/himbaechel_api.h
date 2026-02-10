@@ -72,7 +72,7 @@ struct HimbaechelAPI
     const std::vector<std::string> availablePlacers = {"sa", "heap"};
 
     const std::string defaultRouter = "router1";
-    const std::vector<std::string> availableRouters = {"router1", "router2"};
+    const std::vector<std::string> availableRouters = {"router1", "router2", "router3"};
 
     // --- Bel functions ---
     // Called when a bel is placed/unplaced (with cell=nullptr for a unbind)

@@ -115,6 +115,8 @@ void FABulousImpl::assign_resource_shared()
         }
         sharedResource[bel] = sharedBel;
     }
+
+    // think about how to deal with shared wire between cells
 }
 
 void FABulousImpl::assign_cell_info()
@@ -171,6 +173,32 @@ bool FABulousImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
                          ctx->nameOf(sharedCell));
             }
             return false;
+        }
+    }
+
+    auto shared_bel_pins = fu.get_shared_bel_pins(bel);
+    if (!shared_bel_pins.empty()) {
+        // if there is some shared bel pin
+        for (auto pin : shared_bel_pins) {
+            // find all bels in the same tile
+            Loc loc = ctx->getBelLocation(bel);
+            for (auto tBel : ctx->getBelsByTile(loc.x, loc.y)) {
+                // and if the bel is in use
+                auto tBounded = ctx->getBoundBelCell(tBel);
+                if (tBounded == nullptr || tBounded == boundedCell)
+                    continue;
+
+                // check its shared pin
+                for (auto nPin : fu.get_shared_bel_pins(tBel)) {
+                    // if the shared pin is on the wire of the local bel and the wire
+                    // is the same as the one on the target bel but the nets are different
+                    // they cannot place together
+                    if (boundedCell->getPort(pin) != tBounded->getPort(nPin) &&
+                        ctx->getBelPinWire(bel, pin) == ctx->getBelPinWire(tBel, nPin)) {
+                        return false;
+                    }
+                }
+            }
         }
     }
 

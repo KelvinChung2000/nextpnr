@@ -19,6 +19,7 @@
 #ifndef VALIDITY_CHECKING_H
 #define VALIDITY_CHECKING_H
 
+#include "FABulous_utils.h"
 #include "fab_cfg.h"
 #include "fab_defs.h"
 #include "sso_array.h"
@@ -27,45 +28,99 @@
 
 NEXTPNR_NAMESPACE_BEGIN
 
-// The validity checking engine for the fabulous configurable CLB
+// Forward declarations
+class CellTagger;
 
-// data that we tag onto cells for fast lookup, so we aren't doing slow hash map accesses in the inner-loop-critical
-// validity checking code
-struct ControlSig
+// Single function to register all checkers - implemented in checker.cc
+extern void register_default_checkers(CellTagger *tagger);
+
+// The validity checking engine for the fabulous any Bels
+
+// Generic resource usage for maximum extensibility
+struct ResourceUsage
 {
-    ControlSig() : net(), invert(false) {};
-    ControlSig(IdString net, bool invert) : net(net), invert(invert) {};
-    IdString net;
-    bool invert;
-    bool operator==(const ControlSig &other) const { return net == other.net && invert == other.invert; }
-    bool operator!=(const ControlSig &other) const { return net != other.net || invert != other.invert; }
+    IdString resource_type;              // "shared_wire", "capacity_slot", "timing_domain", etc.
+    IdString resource_id;                // Specific resource identifier
+    IdString net_or_value;               // What's using it (net name, timing value, etc.)
+    dict<IdString, IdString> properties; // Extensible properties (invert, etc.)
+
+    ResourceUsage() = default;
+    ResourceUsage(IdString type, IdString id, IdString value)
+            : resource_type(type), resource_id(id), net_or_value(value)
+    {
+    }
 };
 
 struct CellTags
 {
-    struct
-    {
-        SSOArray<IdString, MAX_LUTK> lut_inputs; // for checking fracturable LUTs
-        bool carry_used = false;
-        const NetInfo *lut_out = nullptr;
-        // ...
-    } comb; // data for LUTs, or the LUT part of combined LUT+FF cells
-    struct
-    {
-        ControlSig clk, sr, en;
-        bool ff_used = false;
-        bool async = false;
-        bool latch = false;
-        const NetInfo *d = nullptr, *q = nullptr;
-    } ff; // data for FFs, or the FF part of combined LUT+FF cells
+    std::vector<ResourceUsage> resource_usage;
+    dict<IdString, IdString> cell_properties; // Future cell-specific data
+    std::vector<int> compatible_tile_type;    // Direct tile indices for fast lookup
 };
 
-// map between cell and tags, using the flat_index that viaduct defines for this purpose
-struct CellTagger
+// Extractor interface for modularity
+class ResourceExtractor
 {
+  public:
+    virtual ~ResourceExtractor() = default;
+    virtual void extract(const Context *ctx, const CellInfo *ci, CellTags &tags) = 0;
+};
+
+// Simple base class for all validity checkers
+class ValidityChecker
+{
+  public:
+    virtual ~ValidityChecker() = default;
+    std::string violation_reason;
+
+    // Default implementation - can be overridden in derived classes
+    virtual bool check(Context *ctx, const CellTagger &cell_tagger, CellInfo *source_cell, CellInfo *target_cell)
+    {
+        return true; // Default: allow packing
+    }
+
+    std::string get_violation_reason() const { return violation_reason; }
+};
+
+// Modular cell tagger with extensible extractors and packing validation
+class CellTagger
+{
+    Context *ctx;
     std::vector<CellTags> data;
-    const CellTags &get(const CellInfo *ci) const { return data.at(ci->flat_index); }
-    void assign_for(const Context *ctx, const FabricConfig &cfg, const CellInfo *ci);
+    std::vector<std::unique_ptr<ResourceExtractor>> extractors;
+    std::vector<std::unique_ptr<ValidityChecker>> packing_checkers;
+
+  public:
+    explicit CellTagger(Context *ctx);
+    ~CellTagger() = default;
+
+    const CellTags &get(const CellInfo *ci) const
+    {
+        if (!ci) {
+            static const CellTags empty_tags; // Return empty tags for null cells
+            return empty_tags;
+        }
+        if (ci->flat_index >= (int)data.size()) {
+            // Auto-expand if needed during const access
+            const_cast<CellTagger *>(this)->ensure_size(ci->flat_index);
+        }
+        return data.at(ci->flat_index);
+    }
+    void assign_for(const Context *ctx, const CellInfo *ci);
+    void register_extractor(std::unique_ptr<ResourceExtractor> extractor)
+    {
+        extractors.push_back(std::move(extractor));
+    };
+
+    // Packing validation
+    bool check_packing_validity(Context *ctx, CellInfo *source_cell, CellInfo *target_cell);
+    void add_packing_checker(std::unique_ptr<ValidityChecker> checker)
+    {
+        packing_checkers.push_back(std::move(checker));
+    };
+
+  private:
+    void ensure_size(int flat_index);
 };
 
 // we need to add some extra data to CLB bels to track what they do, so we can update CLBState accordingly
@@ -88,38 +143,52 @@ struct BelFlags
     // ...
 };
 
-// state of a CLB, for fast bel->cell lookup
-// TODO: add valid/dirty tracking for incremental validity re-checking, important once we have bigger/more complex CLBs
-// (cf. xilinx/intel arches in nextpnr)
-struct CLBState
+// Modular tile state with pluggable validity checkers
+struct TileState
 {
-    explicit CLBState(const LogicConfig &cfg);
-    // In combined-LC mode (LC bel contains LUT and FF), this indexes the entire LC bel to cell. In separate mode, this
-    // indexes the combinational part (LUT or LUT+carry only).
-    std::unique_ptr<CellInfo *[]> lc_comb;
-    // In split-LC mode only, this maps FF bel (in CLB) index to cell
-    std::unique_ptr<CellInfo *[]> ff;
-    // If there is (a) separate mux bel(s), map them to cells
-    std::unique_ptr<CellInfo *[]> mux;
-    bool check_validity(const LogicConfig &cfg, const CellTagger &cell_data);
+    Loc tile_loc;
+    FABulousUtils fu;
+    std::vector<std::unique_ptr<ValidityChecker>> checkers;
+
+    // Track current resource usage in this tile
+    dict<IdString, std::set<IdString>> shared_wire_usage; // wire_id -> set of nets using it
+    dict<IdString, int> resource_capacity_usage;          // resource_id -> current usage count
+    dict<IdString, IdString> timing_domain_usage;         // resource_id -> timing domain
+
+    explicit TileState(Loc loc, const FABulousUtils &utils);
+    ~TileState() = default;
+
+    void add_checker(std::unique_ptr<ValidityChecker> checker) { checkers.push_back(std::move(checker)); };
+
+    // Update tile state when cells are placed/removed
+    void update_placement(Context *ctx, BelId bel, CellInfo *old_cell, CellInfo *new_cell);
+
+    void load_database_defined_checkers(const TileExtraData &tile_extra);
 };
 
-struct BlockTracker
+// Core validity checker implementations are defined privately in checker.cc
+
+// Modular fabric-wide tracker
+struct FabricTracker
 {
     Context *ctx;
     const FabricConfig &cfg;
-    std::vector<BelFlags> bel_data;
+    const FABulousUtils &utils;
 
-    BlockTracker(Context *ctx, const FabricConfig &cfg) : ctx(ctx), cfg(cfg) {};
-    void set_bel_type(BelId bel, BelFlags::BlockType block, BelFlags::FuncType func, uint8_t index);
+    FabricTracker(Context *ctx, const FabricConfig &cfg, const FABulousUtils &utils) : ctx(ctx), cfg(cfg), utils(utils)
+    {
+    }
+
     void update_bel(BelId bel, CellInfo *old_cell, CellInfo *new_cell);
+
     struct TileData
     {
-        std::unique_ptr<CLBState> clb;
-        // ...
+        std::unique_ptr<TileState> state;
     };
     std::vector<std::vector<TileData>> tiles;
-    bool check_validity(BelId bel, const FabricConfig &cfg, const CellTagger &cell_data);
+
+  private:
+    TileState *ensure_tile_state(Loc loc);
 };
 
 struct PseudoPipTags

@@ -11,6 +11,7 @@
 #define HIMBAECHEL_GFXIDS "uarch/example/gfxids.inc"
 #include "himbaechel_constids.h"
 #include "himbaechel_gfxids.h"
+#include "validity_check.h"
 
 NEXTPNR_NAMESPACE_BEGIN
 
@@ -18,8 +19,9 @@ namespace {
 struct FABulousPacker
 {
     Context *ctx;
-    std::vector<PackingRule> packingRules;
-    FABulousPacker(Context *ctx, std::vector<PackingRule> packingRules) : ctx(ctx), packingRules(packingRules) {}
+    FABulousUtils fu;
+    CellTagger cell_tags;
+    FABulousPacker(Context *ctx, FABulousUtils fu) : ctx(ctx), fu(fu), cell_tags(ctx) {}
 
     void pack()
     {
@@ -28,10 +30,26 @@ struct FABulousPacker
         // id_GND);
         fold_bit_const();
         fold_clock_drive();
-        remove_undrive_constant();
+        remove_undriven_constant();
         int constrain_count = 0;
+        int validation_fail_count = 0;
 
-        for (PackingRule &rule : packingRules) {
+        for (auto &cell : ctx->cells) {
+            auto &ci = *cell.second;
+            cell_tags.assign_for(ctx, &ci);
+            if (ctx->debug) {
+                const auto &tags = cell_tags.get(&ci);
+                if (!tags.resource_usage.empty()) {
+                    log_info("Cell %s resource usage:\n", ci.name.c_str(ctx));
+                    for (const auto &usage : tags.resource_usage) {
+                        log_info("  %s:%s -> %s\n", usage.resource_type.c_str(ctx), usage.resource_id.c_str(ctx),
+                                 usage.net_or_value.c_str(ctx));
+                    }
+                }
+            }
+        }
+
+        for (PackingRule &rule : fu.get_packing_rules()) {
             for (auto &[net_name, net_info] : ctx->nets) {
                 if (net_info->driver.cell == nullptr)
                     continue;
@@ -43,16 +61,28 @@ struct FABulousPacker
                     continue;
                 }
 
+                auto bel_pins = ctx->getBelPinsForCellPin(&dri_ci, rule.driver.port);
+
                 for (auto &user : net_info->users) {
                     if (rule.driver == CellTypePort(net_info->driver) && rule.user == CellTypePort(user)) {
+
                         auto &usr_ci = *user.cell;
+
+                        // Check packing validity before attempting to constrain cells
+                        if (!cell_tags.check_packing_validity(ctx, &usr_ci, &dri_ci)) {
+                            // Skip this packing attempt if validation fails
+                            validation_fail_count++;
+                            break;;
+                        }
+
                         if (rel_constr_cells(&usr_ci, &dri_ci, rule))
                             constrain_count++;
                     }
                 }
             }
         }
-        log_info("Constrained %d pairs\n", constrain_count);
+        log_info("Constrained %d pairs, %d packing attempts failed validation\n", constrain_count,
+                 validation_fail_count);
     }
 
     // void pack()
@@ -191,8 +221,7 @@ struct FABulousPacker
     //     log_info("Constrained %d pairs\n", constrain_count);
     //     file.close();
     // }
-
-    void remove_undrive_constant()
+    void remove_undriven_constant()
     {
         std::vector<NetInfo *> to_remove_net;
 
@@ -341,17 +370,17 @@ struct FABulousPacker
             return 0;
     }
 
-    bool rel_constr_cells(CellInfo *a, CellInfo *b, PackingRule &rule)
+    bool rel_constr_cells(CellInfo *base_cell, CellInfo *new_cell, PackingRule &rule)
     {
-        NPNR_ASSERT(a != nullptr);
-        NPNR_ASSERT(b != nullptr);
+        NPNR_ASSERT(base_cell != nullptr);
+        NPNR_ASSERT(new_cell != nullptr);
 
-        if (a->cluster == b->cluster && a->cluster != ClusterId() && b->cluster != ClusterId()) {
+        if (base_cell->cluster == new_cell->cluster && base_cell->cluster != ClusterId() && new_cell->cluster != ClusterId()) {
             return false;
         }
 
         // Check if b is already in a's constraint children, which would create a circular dependency
-        if (std::find(a->constr_children.begin(), a->constr_children.end(), b) != a->constr_children.end()) {
+        if (std::find(base_cell->constr_children.begin(), base_cell->constr_children.end(), new_cell) != base_cell->constr_children.end()) {
 #if 0
                     log_info("Skipping constraint: cell %s is already a child of %s\n",
                             b->name.c_str(ctx), a->name.c_str(ctx));
@@ -359,49 +388,47 @@ struct FABulousPacker
             return false;
         }
 
-        if (a->cluster == ClusterId()) {
-            a->cluster = a->name;
-            a->constr_x = 0;
-            a->constr_y = 0;
+        if (base_cell->cluster == ClusterId()) {
+            base_cell->cluster = base_cell->name;
+            base_cell->constr_x = 0;
+            base_cell->constr_y = 0;
 
             if (rule.isBaseRule())
-                a->constr_z = rule.base_z;
+                base_cell->constr_z = rule.base_z;
             else
-                a->constr_z = 0;
+                base_cell->constr_z = 0;
 
-            a->constr_abs_z = rule.isAbsoluteRule();
+            base_cell->constr_abs_z = rule.isAbsoluteRule();
         }
 
-        if (b->cluster == ClusterId()) {
-            NPNR_ASSERT(a->cluster != ClusterId());
-            CellInfo *root = ctx->getClusterRootCell(a->cluster);
-            root->constr_children.push_back(b);
-            b->cluster = root->cluster;
+        if (new_cell->cluster == ClusterId()) {
+            NPNR_ASSERT(base_cell->cluster != ClusterId());
+            CellInfo *root = ctx->getClusterRootCell(base_cell->cluster);
+            root->constr_children.push_back(new_cell);
+            new_cell->cluster = root->cluster;
             if (rule.isAbsoluteRule()) {
-                b->constr_x = rule.rel_x;
-                b->constr_y = rule.rel_y;
-                b->constr_z = rule.rel_z;
-                b->constr_abs_z = true;
+                new_cell->constr_x = rule.rel_x;
+                new_cell->constr_y = rule.rel_y;
+                new_cell->constr_z = rule.rel_z;
+                new_cell->constr_abs_z = true;
             } else {
-                if (root == a){
-                    b->constr_x = rule.rel_x;
-                    b->constr_y = rule.rel_y;
-                    b->constr_z = rule.rel_z;
-                    b->constr_abs_z = false;
+                if (root == base_cell) {
+                    new_cell->constr_x = rule.rel_x;
+                    new_cell->constr_y = rule.rel_y;
+                    new_cell->constr_z = rule.rel_z;
+                    new_cell->constr_abs_z = false;
+                } else {
+                    new_cell->constr_x = root->constr_x + rule.rel_x;
+                    new_cell->constr_y = root->constr_y + rule.rel_y;
+                    new_cell->constr_z = (new_cell->constr_z - get_macro_cell_z(new_cell)) + get_macro_cell_z(base_cell) + rule.rel_z;
+                    new_cell->constr_abs_z = false;
                 }
-                else{
-                    b->constr_x = root->constr_x + rule.rel_x;
-                    b->constr_y = root->constr_y + rule.rel_y;
-                    b->constr_z = (b->constr_z - get_macro_cell_z(b)) + get_macro_cell_z(a) + rule.rel_z;
-                    b->constr_abs_z = false;
-                }
-
             }
-            log_info("Root z is %d, rule rel_z is %d, so b->constr_z is %d\n", get_macro_cell_z(root),
-            rule.rel_z, b->constr_z);
-            log_info("Constrained cell %s to cluster root %s (z=%d) with Rule: \n%s\n\n", b->name.c_str(ctx),
-                     root->name.c_str(ctx), b->constr_z, rule.toString(ctx).c_str());
-        } 
+            log_info("Root z is %d, rule rel_z is %d, so b->constr_z is %d\n", get_macro_cell_z(root), rule.rel_z,
+                     new_cell->constr_z);
+            log_info("Constrained cell %s to cluster root %s (z=%d) with Rule: \n%s\n\n", new_cell->name.c_str(ctx),
+                     root->name.c_str(ctx), new_cell->constr_z, rule.toString(ctx).c_str());
+        }
         // else {
         //     NPNR_ASSERT(b->cluster != ClusterId());
         //     CellInfo *root = ctx->getClusterRootCell(a->cluster);
@@ -497,7 +524,7 @@ void FABulousImpl::pack()
     // }
 
     if (ctx->settings.count(ctx->id("constrain-pair"))) {
-        FABulousPacker packer(ctx, fu.get_packing_rules());
+        FABulousPacker packer(ctx, fu);
         packer.pack();
     }
 }
