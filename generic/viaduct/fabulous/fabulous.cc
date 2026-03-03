@@ -137,7 +137,7 @@ struct FabulousImpl : ViaductAPI
     void pack() override
     {
         if (!pcf_file.empty())
-            fabulous_pcf(ctx, pcf_file);
+            fabulous_pcf(ctx, pcf_file, prohibited_wires, prohibited_pips);
         else
             log_info("No PCF file specified, skipping constraints application.\n");
         fabulous_pack(ctx, cfg);
@@ -164,8 +164,9 @@ struct FabulousImpl : ViaductAPI
     ViaductHelpers h;
 
     std::string fasm_file;
-
     std::string pcf_file;
+    pool<WireId> prohibited_wires;
+    pool<PipId> prohibited_pips;
 
     std::unique_ptr<BlockTracker> blk_trk;
 
@@ -640,6 +641,11 @@ struct FabulousImpl : ViaductAPI
 
     bool checkPipAvail(PipId pip) const override
     {
+        if (prohibited_pips.count(pip))
+            return false;
+        if (!prohibited_wires.empty() &&
+            (prohibited_wires.count(ctx->getPipSrcWire(pip)) || prohibited_wires.count(ctx->getPipDstWire(pip))))
+            return false;
         if (pip.index >= int(pp_tags.size()))
             return true;
         const auto &tags = pp_tags.at(pip.index);

@@ -6,7 +6,8 @@
 
 NEXTPNR_NAMESPACE_BEGIN
 
-void fabulous_pcf(Context *ctx, const std::string &filename);
+void fabulous_pcf(Context *ctx, const std::string &filename, pool<WireId> &prohibited_wires,
+                  pool<PipId> &prohibited_pips);
 
 NEXTPNR_NAMESPACE_END
 

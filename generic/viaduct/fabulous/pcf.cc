@@ -33,8 +33,12 @@ struct FABulousDesignConstraints
     std::string filename;
     int lineno = 0;
     std::map<std::string, PCFCommand> commands;
+    pool<WireId> &prohibited_wires;
+    pool<PipId> &prohibited_pips;
 
-    FABulousDesignConstraints(Context *ctx, const std::string &filename) : ctx(ctx), filename(filename)
+    FABulousDesignConstraints(Context *ctx, const std::string &filename, pool<WireId> &prohibited_wires,
+                              pool<PipId> &prohibited_pips)
+            : ctx(ctx), filename(filename), prohibited_wires(prohibited_wires), prohibited_pips(prohibited_pips)
     {
         setup_commands();
     }
@@ -281,12 +285,6 @@ struct FABulousDesignConstraints
     void execute_prohibit_pip_command(const po::variables_map &vm, int line_number)
     {
         std::string pip_pattern = vm["pip"].as<std::string>();
-        std::string dummy_net_name = "$prohibit_pip";
-        NetInfo *dummy_net = nullptr;
-        if (ctx->nets.count(ctx->id(dummy_net_name)))
-            dummy_net = ctx->nets.at(ctx->id(dummy_net_name)).get();
-        else
-            dummy_net = ctx->createNet(ctx->id(dummy_net_name));
 
         try {
             std::regex pip_regex(pip_pattern);
@@ -306,10 +304,9 @@ struct FABulousDesignConstraints
 
             // Prohibit all matching pips
             for (auto pip : matching_pips) {
-                ctx->bindPip(pip, dummy_net, STRENGTH_USER);
+                prohibited_pips.insert(pip);
                 if (ctx->debug)
-                    log_info("forbade pip '%s' by binding to dummy net '%s'\n", ctx->nameOfPip(pip),
-                             dummy_net_name.c_str());
+                    log_info("forbade pip '%s'\n", ctx->nameOfPip(pip));
             }
 
             log_info("Prohibited %d pips matching pattern '%s'\n", static_cast<int>(matching_pips.size()),
@@ -324,12 +321,6 @@ struct FABulousDesignConstraints
     void execute_prohibit_wire_command(const po::variables_map &vm, int line_number)
     {
         std::string wire_pattern = vm["wire"].as<std::string>();
-        std::string dummy_net_name = "$prohibit_wire";
-        NetInfo *dummy_net = nullptr;
-        if (ctx->nets.count(ctx->id(dummy_net_name)))
-            dummy_net = ctx->nets.at(ctx->id(dummy_net_name)).get();
-        else
-            dummy_net = ctx->createNet(ctx->id(dummy_net_name));
 
         try {
             std::regex wire_regex(wire_pattern);
@@ -349,10 +340,9 @@ struct FABulousDesignConstraints
 
             // Prohibit all matching wires
             for (auto wire : matching_wires) {
-                ctx->bindWire(wire, dummy_net, STRENGTH_USER);
+                prohibited_wires.insert(wire);
                 if (ctx->debug)
-                    log_info("forbade wire '%s' by binding to dummy net '%s'\n", ctx->nameOfWire(wire),
-                             dummy_net_name.c_str());
+                    log_info("forbade wire '%s'\n", ctx->nameOfWire(wire));
             }
 
             log_info("Prohibited %d wires matching pattern '%s'\n", static_cast<int>(matching_wires.size()),
@@ -612,9 +602,10 @@ struct FABulousDesignConstraints
 };
 } // namespace
 
-void fabulous_pcf(Context *ctx, const std::string &filename)
+void fabulous_pcf(Context *ctx, const std::string &filename, pool<WireId> &prohibited_wires,
+                  pool<PipId> &prohibited_pips)
 {
-    FABulousDesignConstraints PCF(ctx, filename);
+    FABulousDesignConstraints PCF(ctx, filename, prohibited_wires, prohibited_pips);
     PCF.apply_constraints();
     log_info("Finished applying constraints from '%s'\n", filename.c_str());
 }
