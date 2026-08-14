@@ -31,8 +31,14 @@ set(SOURCES
     viaduct/fabulous/pcf.h
 )
 
+set(TEST_SOURCES
+    tests/clock_router.cc
+    tests/main.cc
+)
+
 add_nextpnr_architecture(${family}
     CORE_SOURCES ${SOURCES}
+    TEST_SOURCES ${TEST_SOURCES}
     MAIN_SOURCE  main.cc
 )
 
