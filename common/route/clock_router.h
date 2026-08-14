@@ -42,25 +42,45 @@ struct ClockCandidate
 
 enum class ClockRouteStatus : uint8_t
 {
+    // Every sink of the net is on the network.
     ROUTED,
+    // Some sinks are on the network, the rest are left to the general router.
+    // A clock that also feeds ordinary logic lands here.
+    PARTIAL,
+    // No sink is on the network; the net was not touched.
+    REJECTED,
+};
+
+enum class ClockRejectReason : uint8_t
+{
+    NONE,
     // The net's source wire cannot enter any channel of the network.
     NO_ELIGIBLE_CHANNEL,
-    // Every channel that could serve this net was already taken.
+    // Every channel that could serve the remaining sinks was already taken.
     CHANNELS_EXHAUSTED,
-    // Channels were available but do not collectively reach every sink.
+    // Channels were available but do not reach the remaining sinks.
     SINKS_UNREACHABLE,
 };
 
 const char *to_string(ClockRouteStatus status);
+const char *to_string(ClockRejectReason reason);
+
+struct ClockSink
+{
+    store_index<PortRef> user;
+    WireId wire;
+};
 
 struct ClockNetResult
 {
     NetInfo *net = nullptr;
     ClockRouteStatus status = ClockRouteStatus::ROUTED;
-    // Channel indices assigned to this net, ascending.
+    // Why the sinks in unreached_sinks were left off; NONE iff ROUTED.
+    ClockRejectReason reason = ClockRejectReason::NONE;
+    // Channel indices actually used by the bound path, ascending.
     std::vector<int> channels;
-    // Sink wires left unserved. Non-empty only when status != ROUTED.
-    std::vector<WireId> unreached_sinks;
+    // Sinks left to the general router. Empty iff ROUTED.
+    std::vector<ClockSink> unreached_sinks;
 };
 
 struct ClockRouteReport
@@ -88,9 +108,9 @@ struct ClockRouteReport
     }
 };
 
-// Route the given candidates onto the network, binding successful ones at
-// STRENGTH_LOCKED. Nets that do not fit are left untouched for the general
-// router and reported with a reason; nothing is dropped silently.
+// Route the given candidates onto the network, binding what fits at
+// STRENGTH_LOCKED. Sinks that do not fit are left to the general router and
+// reported with a reason; nothing is dropped silently.
 ClockRouteReport route_clock_nets(Context *ctx, const ClockNetwork &network,
                                   const std::vector<ClockCandidate> &candidates);
 

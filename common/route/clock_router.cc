@@ -31,14 +31,27 @@ const char *to_string(ClockRouteStatus status)
     switch (status) {
     case ClockRouteStatus::ROUTED:
         return "routed";
-    case ClockRouteStatus::NO_ELIGIBLE_CHANNEL:
-        return "no channel can be entered from the net source";
-    case ClockRouteStatus::CHANNELS_EXHAUSTED:
-        return "all channels that could serve this net are taken";
-    case ClockRouteStatus::SINKS_UNREACHABLE:
-        return "assigned channels do not reach every sink";
+    case ClockRouteStatus::PARTIAL:
+        return "partially routed";
+    case ClockRouteStatus::REJECTED:
+        return "rejected";
     }
     NPNR_ASSERT_FALSE("unknown ClockRouteStatus");
+}
+
+const char *to_string(ClockRejectReason reason)
+{
+    switch (reason) {
+    case ClockRejectReason::NONE:
+        return "none";
+    case ClockRejectReason::NO_ELIGIBLE_CHANNEL:
+        return "no channel can be entered from the net source";
+    case ClockRejectReason::CHANNELS_EXHAUSTED:
+        return "all channels that could serve these sinks are taken";
+    case ClockRejectReason::SINKS_UNREACHABLE:
+        return "no channel reaches these sinks";
+    }
+    NPNR_ASSERT_FALSE("unknown ClockRejectReason");
 }
 
 namespace {
@@ -46,12 +59,6 @@ namespace {
 // Predecessor markers for the channel chain search.
 constexpr int UNVISITED = -2;
 constexpr int CHAIN_START = -1;
-
-struct SinkRef
-{
-    store_index<PortRef> user;
-    WireId wire;
-};
 
 struct ClockRouterWorker
 {
@@ -65,16 +72,16 @@ struct ClockRouterWorker
     }
 
     // Distinct sink wires of a net, first user of each kept for diagnostics.
-    std::vector<SinkRef> sinks_of(NetInfo *net) const
+    std::vector<ClockSink> sinks_of(NetInfo *net) const
     {
-        std::vector<SinkRef> sinks;
+        std::vector<ClockSink> sinks;
         pool<WireId> seen;
         for (auto usr : net->users.enumerate()) {
             for (WireId wire : ctx->getNetinfoSinkWires(net, usr.value)) {
                 if (wire == WireId() || seen.count(wire))
                     continue;
                 seen.insert(wire);
-                sinks.push_back(SinkRef{usr.index, wire});
+                sinks.push_back(ClockSink{usr.index, wire});
             }
         }
         return sinks;
@@ -133,11 +140,12 @@ struct ClockRouterWorker
     // Minimum channel-set cover, approached one uncovered sink at a time. Reach
     // is an optimistic filter here; path planning below is the authority on
     // what is actually connected.
-    std::vector<int> select_channels(WireId src_wire, const std::vector<SinkRef> &sinks, pool<WireId> &uncovered) const
+    std::vector<int> select_channels(WireId src_wire, const std::vector<ClockSink> &sinks) const
     {
         pool<WireId> reached;
         reached.insert(src_wire);
-        for (const SinkRef &sink : sinks)
+        pool<WireId> uncovered;
+        for (const ClockSink &sink : sinks)
             uncovered.insert(sink.wire);
 
         std::vector<bool> taken(net_desc.channels.size());
@@ -149,7 +157,7 @@ struct ClockRouterWorker
             // Sinks are visited in net order, so the chain committed first is
             // the same on every run.
             WireId target;
-            for (const SinkRef &sink : sinks) {
+            for (const ClockSink &sink : sinks) {
                 if (uncovered.count(sink.wire)) {
                     target = sink.wire;
                     break;
@@ -227,8 +235,12 @@ struct ClockRouterWorker
         if (bound == net)
             ctx->unbindWire(src_wire);
         ctx->bindWire(src_wire, net, STRENGTH_LOCKED);
-        for (PipId pip : pips)
+        for (PipId pip : pips) {
+            // Overlapping channel resource sets would otherwise corrupt the
+            // binding silently on arches whose bindPip overwrites.
+            NPNR_ASSERT(ctx->getBoundWireNet(ctx->getPipDstWire(pip)) == nullptr);
             ctx->bindPip(pip, net, STRENGTH_LOCKED);
+        }
     }
 
     void route(NetInfo *net, ClockNetResult &result)
@@ -237,48 +249,54 @@ struct ClockRouterWorker
         if (src_wire == WireId())
             log_error("net '%s' has no source wire\n", ctx->nameOf(net));
 
-        std::vector<SinkRef> sinks = sinks_of(net);
-        pool<WireId> uncovered;
-        std::vector<int> chosen = select_channels(src_wire, sinks, uncovered);
-
-        if (!uncovered.empty()) {
-            result.status = classify_failure(src_wire, chosen, uncovered);
-            for (const SinkRef &sink : sinks)
-                if (uncovered.count(sink.wire))
-                    result.unreached_sinks.push_back(sink.wire);
-            return;
-        }
+        std::vector<ClockSink> sinks = sinks_of(net);
+        std::vector<int> chosen = select_channels(src_wire, sinks);
 
         pool<PipId> allowed;
         for (int channel : chosen)
             for (PipId pip : net_desc.channels.at(channel).resources)
                 allowed.insert(pip);
 
+        // router2 adopts pre-routed arcs one at a time, so a net whose sinks
+        // are not all on the network can still take the network for the ones
+        // that are. A clock that also feeds ordinary logic needs this.
         pool<WireId> tree;
         tree.insert(src_wire);
         std::vector<PipId> pips;
-        for (const SinkRef &sink : sinks) {
+        for (const ClockSink &sink : sinks) {
             if (!plan_sink(sink.wire, allowed, tree, pips))
-                result.unreached_sinks.push_back(sink.wire);
+                result.unreached_sinks.push_back(sink);
         }
 
-        if (!result.unreached_sinks.empty()) {
-            // Nothing has been bound yet, so the net is left whole for the
-            // general router rather than half on the network.
-            result.status = ClockRouteStatus::SINKS_UNREACHABLE;
+        if (pips.empty()) {
+            result.status = ClockRouteStatus::REJECTED;
+            result.reason = classify_failure(src_wire, chosen, result.unreached_sinks);
             return;
         }
 
         bind_net(net, src_wire, pips);
-        std::sort(chosen.begin(), chosen.end());
-        result.channels = chosen;
-        result.status = ClockRouteStatus::ROUTED;
-        for (int channel : chosen)
+        result.status = result.unreached_sinks.empty() ? ClockRouteStatus::ROUTED : ClockRouteStatus::PARTIAL;
+        if (!result.unreached_sinks.empty())
+            result.reason = classify_failure(src_wire, chosen, result.unreached_sinks);
+
+        // Claim only the channels the bound path actually runs through, so a
+        // channel selected but then unused stays available to the next net.
+        pool<PipId> bound(pips.begin(), pips.end());
+        for (int channel : chosen) {
+            bool used = false;
+            for (PipId pip : net_desc.channels.at(channel).resources)
+                if (bound.count(pip))
+                    used = true;
+            if (!used)
+                continue;
+            result.channels.push_back(channel);
             report.channel_owner.at(channel) = net;
+        }
+        std::sort(result.channels.begin(), result.channels.end());
     }
 
-    ClockRouteStatus classify_failure(WireId src_wire, const std::vector<int> &chosen,
-                                      const pool<WireId> &uncovered) const
+    ClockRejectReason classify_failure(WireId src_wire, const std::vector<int> &chosen,
+                                       const std::vector<ClockSink> &unreached) const
     {
         if (chosen.empty()) {
             bool any_entry = false;
@@ -287,18 +305,18 @@ struct ClockRouterWorker
                     if (entry == src_wire)
                         any_entry = true;
             if (!any_entry)
-                return ClockRouteStatus::NO_ELIGIBLE_CHANNEL;
+                return ClockRejectReason::NO_ELIGIBLE_CHANNEL;
         }
-        // A taken channel that would have covered an uncovered sink means the
+        // A taken channel that would have served one of these sinks means the
         // net lost a contest, not that the fabric cannot reach it.
         for (int i = 0; i < int(net_desc.channels.size()); i++) {
             if (report.channel_owner.at(i) == nullptr)
                 continue;
-            for (WireId wire : uncovered)
-                if (net_desc.reach.at(i).count(wire))
-                    return ClockRouteStatus::CHANNELS_EXHAUSTED;
+            for (const ClockSink &sink : unreached)
+                if (net_desc.reach.at(i).count(sink.wire))
+                    return ClockRejectReason::CHANNELS_EXHAUSTED;
         }
-        return ClockRouteStatus::SINKS_UNREACHABLE;
+        return ClockRejectReason::SINKS_UNREACHABLE;
     }
 };
 
@@ -331,16 +349,21 @@ ClockRouteReport route_clock_nets(Context *ctx, const ClockNetwork &network,
     }
 
     for (const ClockNetResult &result : worker.report.nets) {
-        if (result.status == ClockRouteStatus::ROUTED) {
+        if (result.status != ClockRouteStatus::REJECTED) {
             std::string channels;
             for (int channel : result.channels)
                 channels += stringf("%s%s", channels.empty() ? "" : ", ", network.channels.at(channel).name.c_str(ctx));
-            log_info("    net '%s' routed on clock channel%s %s\n", ctx->nameOf(result.net),
+            log_info("    net '%s' %s on clock channel%s %s\n", ctx->nameOf(result.net), to_string(result.status),
                      result.channels.size() == 1 ? "" : "s", channels.c_str());
-        } else {
-            log_warning("    net '%s' left to the general router: %s (%d sink%s affected)\n", ctx->nameOf(result.net),
-                        to_string(result.status), int(result.unreached_sinks.size()),
-                        result.unreached_sinks.size() == 1 ? "" : "s");
+        }
+        if (result.unreached_sinks.empty())
+            continue;
+        log_warning("    net '%s': %d sink%s left to the general router, %s\n", ctx->nameOf(result.net),
+                    int(result.unreached_sinks.size()), result.unreached_sinks.size() == 1 ? "" : "s",
+                    to_string(result.reason));
+        for (const ClockSink &sink : result.unreached_sinks) {
+            const PortRef &user = result.net->users.at(sink.user);
+            log_warning("        %s.%s\n", ctx->nameOf(user.cell), ctx->nameOf(user.port));
         }
     }
     log_info("    %d of %d clock channels used\n", worker.report.used_channels(), int(network.channels.size()));

@@ -65,8 +65,9 @@ struct TestFabric
     // without this no two domains could reach the same tile.
     std::vector<std::vector<CellInfo *>> ffs;
     std::vector<std::vector<WireId>> tile_clk;
+    std::vector<std::vector<WireId>> tile_data;
 
-    IdString id_CLK, id_O, id_Q;
+    IdString id_CLK, id_O, id_Q, id_D;
 
     int tile_index(int x, int y) const { return y * spec.width + x; }
     int tile_count() const { return spec.width * spec.height; }
@@ -95,6 +96,7 @@ struct TestFabric
         id_CLK = ctx->id("CLK");
         id_O = ctx->id("O");
         id_Q = ctx->id("Q");
+        id_D = ctx->id("D");
 
         build_tiles();
         build_sources();
@@ -102,12 +104,24 @@ struct TestFabric
             build_ladder();
         else
             build_mesh();
+        build_general_routing();
         network.index(ctx);
+    }
+
+    // Pips outside every channel, reaching the data pins. The clock router must
+    // never use these, and the general router must remain free to.
+    void build_general_routing()
+    {
+        for (size_t s = 0; s < source_wires.size(); s++)
+            for (int slot = 0; slot < slots(); slot++)
+                for (int i = 0; i < tile_count(); i++)
+                    add_pip(stringf("PIP_GENERAL_%zu_%d_%d", s, slot, i), source_wires.at(s), tile_data.at(slot).at(i));
     }
 
     void build_tiles()
     {
         tile_clk.assign(slots(), std::vector<WireId>(tile_count()));
+        tile_data.assign(slots(), std::vector<WireId>(tile_count()));
         ffs.assign(slots(), std::vector<CellInfo *>(tile_count()));
         for (int y = 0; y < spec.height; y++) {
             for (int x = 0; x < spec.width; x++) {
@@ -118,9 +132,16 @@ struct TestFabric
                                             Loc(x, y, slot), false, false);
                     ctx->addBelInput(bel, id_CLK, clk);
 
+                    // An ordinary data pin, deliberately off the clock network,
+                    // so a net can be given a sink the network cannot serve.
+                    WireId data = ctx->addWire(wire_name(stringf("D_%d_%d_%d", x, y, slot)), id_D, x, y);
+                    ctx->addBelInput(bel, id_D, data);
+
                     CellInfo *cell = ctx->createCell(ctx->id(stringf("ff_%d_%d_%d", x, y, slot)), ctx->id("FF"));
                     cell->addInput(id_CLK);
+                    cell->addInput(id_D);
                     cell->bel_pins[id_CLK].push_back(id_CLK);
+                    cell->bel_pins[id_D].push_back(id_D);
                     if (slot == 0) {
                         WireId out = ctx->addWire(wire_name(stringf("Q_%d_%d", x, y)), id_Q, x, y);
                         ctx->addBelOutput(bel, id_Q, out);
@@ -130,6 +151,7 @@ struct TestFabric
                     ctx->bindBel(bel, cell, STRENGTH_STRONG);
 
                     tile_clk.at(slot).at(index) = clk;
+                    tile_data.at(slot).at(index) = data;
                     ffs.at(slot).at(index) = cell;
                 }
             }
@@ -244,6 +266,15 @@ struct TestFabric
     }
 
     std::vector<WireId> sinks_of_clock_net(int index) const { return tile_clk.at(index); }
+
+    // The same clock, but also feeding one ordinary data pin. Real designs do
+    // this with sampled clocks and with high-fanout resets.
+    NetInfo *make_mixed_net(int index)
+    {
+        NetInfo *net = make_clock_net(index);
+        ffs.at(slots() - 1).at(0)->connectPort(id_D, net);
+        return net;
+    }
 
     // A net driven by fabric logic rather than a clock source: nothing on the
     // network can be entered from it.
@@ -363,7 +394,8 @@ TEST_P(ClockRouterTest, oversubscription_is_reported_not_silent)
         if (result.status == ClockRouteStatus::ROUTED)
             continue;
         ++rejected;
-        EXPECT_EQ(result.status, ClockRouteStatus::CHANNELS_EXHAUSTED);
+        EXPECT_EQ(result.status, ClockRouteStatus::REJECTED);
+        EXPECT_EQ(result.reason, ClockRejectReason::CHANNELS_EXHAUSTED);
         EXPECT_FALSE(result.unreached_sinks.empty());
         // The loser is the lowest-priority candidate, not whichever net the
         // hash table happened to yield last.
@@ -380,8 +412,31 @@ TEST_P(ClockRouterTest, logic_driven_net_is_rejected_with_a_reason)
     ClockRouteReport report = route_clock_nets(ctx.get(), fabric.network, candidates_of({net}));
 
     ASSERT_EQ(report.nets.size(), 1u);
-    EXPECT_EQ(report.nets.at(0).status, ClockRouteStatus::NO_ELIGIBLE_CHANNEL);
+    EXPECT_EQ(report.nets.at(0).status, ClockRouteStatus::REJECTED);
+    EXPECT_EQ(report.nets.at(0).reason, ClockRejectReason::NO_ELIGIBLE_CHANNEL);
     EXPECT_EQ(report.used_channels(), 0);
+}
+
+// router2 adopts pre-routed arcs individually, so a net with one sink off the
+// network still gets the network for the rest of them.
+TEST_P(ClockRouterTest, mixed_sink_net_keeps_the_clock_sinks_on_the_network)
+{
+    build();
+    NetInfo *net = fabric.make_mixed_net(0);
+
+    ClockRouteReport report = route_clock_nets(ctx.get(), fabric.network, candidates_of({net}));
+
+    ASSERT_EQ(report.nets.size(), 1u);
+    const ClockNetResult &result = report.nets.at(0);
+    EXPECT_EQ(result.status, ClockRouteStatus::PARTIAL);
+    EXPECT_EQ(result.reason, ClockRejectReason::SINKS_UNREACHABLE);
+    ASSERT_EQ(result.unreached_sinks.size(), 1u);
+    EXPECT_EQ(net->users.at(result.unreached_sinks.at(0).user).port, fabric.id_D);
+
+    // The clock sinks are bound; the data sink is left for the general router.
+    for (WireId clk : fabric.sinks_of_clock_net(0))
+        EXPECT_EQ(ctx->getBoundWireNet(clk), net);
+    EXPECT_EQ(ctx->getBoundWireNet(result.unreached_sinks.at(0).wire), nullptr);
 }
 
 TEST_P(ClockRouterTest, assignment_is_deterministic)
@@ -413,9 +468,12 @@ TEST_P(ClockRouterTest, assignment_is_deterministic)
 TEST_P(ClockRouterTest, router2_adopts_the_bound_clock_tree)
 {
     build();
-    NetInfo *net = fabric.make_clock_net(0);
+    // A mixed net, so this also proves adoption is per-arc: the general router
+    // must complete the data sink without disturbing the bound clock tree.
+    NetInfo *net = fabric.make_mixed_net(0);
     ClockRouteReport report = route_clock_nets(ctx.get(), fabric.network, candidates_of({net}));
-    ASSERT_TRUE(report.all_routed());
+    ASSERT_EQ(report.nets.at(0).status, ClockRouteStatus::PARTIAL);
+    WireId data_sink = report.nets.at(0).unreached_sinks.at(0).wire;
 
     dict<WireId, PipId> before;
     for (const auto &wire : net->wires)
@@ -423,12 +481,15 @@ TEST_P(ClockRouterTest, router2_adopts_the_bound_clock_tree)
 
     router2(ctx.get(), Router2Cfg(ctx.get()));
 
-    ASSERT_EQ(net->wires.size(), before.size());
-    for (const auto &wire : net->wires) {
-        ASSERT_TRUE(before.count(wire.first)) << "router2 added a wire to the clock net";
-        EXPECT_EQ(before.at(wire.first), wire.second.pip);
-        EXPECT_EQ(wire.second.strength, STRENGTH_LOCKED);
+    for (const auto &entry : before) {
+        ASSERT_TRUE(net->wires.count(entry.first)) << "router2 dropped a pre-routed wire";
+        EXPECT_EQ(net->wires.at(entry.first).pip, entry.second);
+        EXPECT_EQ(net->wires.at(entry.first).strength, STRENGTH_LOCKED);
     }
+    // The sink the network could not serve is routed, by the general router.
+    ASSERT_TRUE(net->wires.count(data_sink));
+    EXPECT_FALSE(before.count(data_sink));
+    EXPECT_LT(net->wires.at(data_sink).strength, STRENGTH_LOCKED);
 }
 
 INSTANTIATE_TEST_SUITE_P(Topologies, ClockRouterTest, ::testing::Values(Topology::LADDER, Topology::MESH),
