@@ -127,10 +127,39 @@ not a hardcoded assumption — a fabric whose distribution does not work that wa
 per-region occupancy instead, and only the capacity check changes.
 
 Cover then becomes: choose a root, then select the `DISTRIBUTE`/`LEAF` channels covering all
-sink regions, subject to per-region budgets. Greedy in priority order first. An ILP is
-considered **only if measurement shows greedy failing on realistic fabrics** — the FPGA'16
-SAT result suggests exact methods pay off at commercial scale, but that is not evidence for
-our scale, and Gurobi is available if it becomes warranted.
+sink regions, subject to per-region budgets.
+
+## Assignment is an integer program
+
+Decided up front rather than left to measurement: **assignment is solved as an ILP over all
+candidate nets at once**, using HiGHS (MIT, vendored as a submodule). The problem is small —
+hundreds of binaries — and exact solving is not the main gain. Deciding nets *jointly* is:
+any rule that assigns one net at a time can strand a later net on a channel an earlier one
+took for no benefit, and no amount of tuning a per-net rule fixes that.
+
+Three properties the formulation must have, each a way the obvious model goes wrong:
+
+- **Connectivity by flow, not implication.** A net's channels must form one structure rooted
+  at its source. Writing that as "a channel may be taken if a predecessor was taken" admits
+  detached groups that justify each other — and this is not hypothetical, since a channel's
+  reach includes its own entry wires, which on a ladder are also its neighbour's, making the
+  channel graph mutually cyclic. Connectivity is enforced with single-commodity flow: the
+  source supplies one unit per channel taken, each taken channel consumes one, and flow only
+  moves along taken channels. A detached group has no supply and cannot balance.
+- **Strict priority by lexicographic solves, not weights.** A higher-priority net is never
+  displaced to fit lower-priority ones. Encoding that with one weighted objective needs
+  weights separated by orders of magnitude — for realistic net and sink counts the range
+  exceeds what a solver's tolerances can be trusted to resolve. Instead each priority class
+  is minimised in turn and its result pinned as a constraint. Pinning fixes the *number* of
+  sinks dropped, not which channels were used, so lower classes may still push higher ones
+  onto different channels — which is exactly where the joint benefit survives.
+- **Dropping is a variable, not an infeasibility.** Coverage is never a hard constraint.
+  Each sink has a drop variable, so the model always solves and the solution states which
+  sinks fell off. An infeasible model would report nothing useful.
+
+Determinism holds for a fixed solver version: HiGHS is run single-threaded with a fixed seed,
+and the final objective breaks ties toward the lowest channel indices. Stability across HiGHS
+versions is not claimed.
 
 ## Pipeline
 
@@ -208,15 +237,17 @@ router, this test is what catches it.
 
 ## Implementation status
 
-Built in `common/route/clock_network.{h,cc}` and `common/route/clock_router.{h,cc}`, with tests
-in `generic/tests/clock_router.cc` parameterised over ladder and mesh.
+Built in `common/route/clock_network.{h,cc}`, `common/route/clock_assign.{h,cc}` and
+`common/route/clock_router.{h,cc}`, with tests in `generic/tests/clock_router.cc`
+parameterised over ladder and mesh.
 
 Done:
 
 - The channel model and its derived reach index.
-- Assignment as a minimum channel-set cover, found by breadth-first search over channels. The
-  search handles transit channels — a mesh trunk covers no sink itself — which a
-  coverage-scoring greedy cannot. Ladder and mesh differ only in data.
+- Assignment as a minimum channel-set cover, solved for all nets at once as an ILP with the
+  flow, lexicographic-priority and drop-variable structure described above. It handles transit
+  channels — a mesh trunk covers no sink itself — and it fits a net that a per-net rule would
+  strand, which is the test that justifies the solver. Ladder and mesh differ only in data.
 - Binding at `STRENGTH_LOCKED`, and the router2 pre-routed contract, confirmed end to end on
   `4d235150`: router2 leaves the bound tree untouched and completes the remaining sinks.
 - Per-sink granularity: a net whose sinks are not all reachable keeps the network for the ones
@@ -226,9 +257,11 @@ Done:
 Not yet built, all of it M4 detail rather than structure:
 
 - **Region budgets.** `ClockChannel::region` is carried but no budget is enforced, so the ISPD
-  rectangle rule is not in the code. The mesh tests pass without ever binding a budget.
-- **Root selection by sink centroid.** Roots are currently whichever the chain search reaches
-  first. The test mesh has symmetric roots, so it cannot tell the two apart.
+  rectangle rule is not in the code. The mesh tests pass without ever binding a budget. Under
+  the ILP this is one further linear constraint per region.
+- **Root selection by sink centroid.** Roots are currently whichever the solver picks among
+  equal-cost options. The test mesh has symmetric roots, so it cannot tell the two apart. Under
+  the ILP this becomes objective coefficients rather than a separate selection step.
 - **Discovery from a chipdb.** Channels are hand-constructed by the caller.
 - **Tap-mux reservation** (pipeline step 4). Locked binding already keeps the general router off
   bound wires; explicit reservation of unused tap muxes only matters once a real fabric puts
@@ -242,6 +275,6 @@ Not yet built, all of it M4 detail rather than structure:
   does", not a peer stage. A true stage would sit between `ctx->place()` and `ctx->route()`
   (`common/kernel/command.cc:655-668`), which is a core change. Deferred; the module will be
   self-contained with a clean interface so the call site can move.
-- Ranking policy when a clock and a very high-fanout reset compete for the last channel.
-- Whether greedy cover suffices at M4, or an ILP is warranted. Deliberately left to
-  measurement rather than decided up front.
+- How much a fabric-sized instance actually costs to solve. Assignment now dominates test
+  runtime — hundreds of milliseconds against a few for everything else — and since there is one
+  solve per priority class, giving every net its own priority is the expensive case.

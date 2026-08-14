@@ -49,6 +49,9 @@ struct FabricSpec
     int capacity = 2;
     // Mesh only: tiles along the edge of a clock region.
     int region_size = 2;
+    // Ladder only: restrict every channel but the first to the first clock
+    // source, so which net takes which channel actually matters.
+    bool asymmetric_entries = false;
 };
 
 // A generic-arch fabric with a dedicated clock network laid over it.
@@ -187,14 +190,19 @@ struct TestFabric
             channel.name = ctx->id(stringf("LADDER_%d", c));
             channel.tier = ClockTier::LEAF;
             channel.entries = source_wires;
+            if (spec.asymmetric_entries && c > 0)
+                channel.entries = {source_wires.at(0)};
 
             std::vector<WireId> spine;
             for (int i = 0; i < tile_count(); i++)
                 spine.push_back(ctx->addWire(wire_name(stringf("SPINE_%d_%d", c, i)), ctx->id("CLK_ROUTE"),
                                              i % spec.width, i / spec.width));
 
-            for (size_t s = 0; s < source_wires.size(); s++)
-                channel.resources.insert(add_pip(stringf("PIP_ENTRY_%d_%zu", c, s), source_wires.at(s), spine.at(0)));
+            // Only declared entries get a pip in, so the model and the fabric
+            // agree on who may drive this channel.
+            for (size_t s = 0; s < channel.entries.size(); s++)
+                channel.resources.insert(
+                        add_pip(stringf("PIP_ENTRY_%d_%zu", c, s), channel.entries.at(s), spine.at(0)));
             for (int i = 1; i < tile_count(); i++)
                 channel.resources.insert(add_pip(stringf("PIP_CHAIN_%d_%d", c, i), spine.at(i - 1), spine.at(i)));
             for (int i = 0; i < tile_count(); i++)
@@ -504,5 +512,35 @@ TEST_P(ClockRouterTest, router2_adopts_the_bound_clock_tree)
 
 INSTANTIATE_TEST_SUITE_P(Topologies, ClockRouterTest, ::testing::Values(Topology::LADDER, Topology::MESH),
                          [](const ::testing::TestParamInfo<Topology> &info) { return name_of(info.param); });
+
+// The reason assignment is solved for all nets at once rather than one net at a
+// time. Channel 0 accepts either clock source; channel 1 accepts only the
+// first. Taking channels in priority order strands the second net on the
+// obvious choice — the high-priority net grabs channel 0, which is the only one
+// the low-priority net could ever have used. Both fit only if the two nets are
+// decided together.
+TEST(ClockRouterAssignment, high_priority_net_yields_a_channel_it_does_not_need)
+{
+    std::unique_ptr<Context> ctx = make_context();
+    FabricSpec spec;
+    spec.topology = Topology::LADDER;
+    spec.capacity = 2;
+    spec.asymmetric_entries = true;
+    TestFabric fabric;
+    fabric.build(ctx.get(), spec);
+
+    NetInfo *flexible = fabric.make_clock_net(0);    // may use either channel
+    NetInfo *constrained = fabric.make_clock_net(1); // may use only channel 0
+
+    ClockRouteReport report =
+            route_clock_nets(ctx.get(), fabric.network, {ClockCandidate{flexible, 10}, ClockCandidate{constrained, 1}});
+
+    EXPECT_TRUE(report.all_routed());
+    ASSERT_EQ(report.nets.size(), 2u);
+    EXPECT_EQ(report.nets.at(0).net, flexible);
+    EXPECT_EQ(report.nets.at(0).channels, std::vector<int>{1});
+    EXPECT_EQ(report.nets.at(1).net, constrained);
+    EXPECT_EQ(report.nets.at(1).channels, std::vector<int>{0});
+}
 
 } // namespace

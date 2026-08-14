@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <deque>
 
+#include "clock_assign.h"
 #include "log.h"
 
 NEXTPNR_NAMESPACE_BEGIN
@@ -56,10 +57,6 @@ const char *to_string(ClockRejectReason reason)
 
 namespace {
 
-// Predecessor markers for the channel chain search.
-constexpr int UNVISITED = -2;
-constexpr int CHAIN_START = -1;
-
 struct ClockRouterWorker
 {
     Context *ctx;
@@ -85,99 +82,6 @@ struct ClockRouterWorker
             }
         }
         return sinks;
-    }
-
-    bool is_enterable(int channel, const pool<WireId> &from) const
-    {
-        for (WireId entry : net_desc.channels.at(channel).entries)
-            if (from.count(entry))
-                return true;
-        return false;
-    }
-
-    // Shortest chain of free channels leading from the wires already reached to
-    // a channel that reaches `target`, by breadth-first search over channels.
-    // A chain of one is the ladder case; a mesh needs a trunk channel that
-    // covers no sink at all before a channel that covers many, which is why
-    // channels are searched rather than scored by coverage.
-    std::vector<int> find_chain(const pool<WireId> &reached, const std::vector<bool> &taken, WireId target) const
-    {
-        int count = int(net_desc.channels.size());
-        std::vector<int> prev(count, UNVISITED);
-        std::deque<int> queue;
-        for (int i = 0; i < count; i++) {
-            if (taken.at(i) || !is_enterable(i, reached))
-                continue;
-            prev.at(i) = CHAIN_START;
-            queue.push_back(i);
-        }
-
-        int found = -1;
-        while (!queue.empty() && found < 0) {
-            int current = queue.front();
-            queue.pop_front();
-            if (net_desc.reach.at(current).count(target)) {
-                found = current;
-                break;
-            }
-            for (int i = 0; i < count; i++) {
-                if (taken.at(i) || prev.at(i) != UNVISITED)
-                    continue;
-                if (!is_enterable(i, net_desc.reach.at(current)))
-                    continue;
-                prev.at(i) = current;
-                queue.push_back(i);
-            }
-        }
-
-        std::vector<int> chain;
-        for (int cursor = found; cursor >= 0; cursor = prev.at(cursor))
-            chain.push_back(cursor);
-        std::reverse(chain.begin(), chain.end());
-        return chain;
-    }
-
-    // Minimum channel-set cover, approached one uncovered sink at a time. Reach
-    // is an optimistic filter here; path planning below is the authority on
-    // what is actually connected.
-    std::vector<int> select_channels(WireId src_wire, const std::vector<ClockSink> &sinks) const
-    {
-        pool<WireId> reached;
-        reached.insert(src_wire);
-        pool<WireId> uncovered;
-        for (const ClockSink &sink : sinks)
-            uncovered.insert(sink.wire);
-
-        std::vector<bool> taken(net_desc.channels.size());
-        for (size_t i = 0; i < net_desc.channels.size(); i++)
-            taken.at(i) = report.channel_owner.at(i) != nullptr;
-
-        std::vector<int> chosen;
-        while (!uncovered.empty()) {
-            // Sinks are visited in net order, so the chain committed first is
-            // the same on every run.
-            WireId target;
-            for (const ClockSink &sink : sinks) {
-                if (uncovered.count(sink.wire)) {
-                    target = sink.wire;
-                    break;
-                }
-            }
-
-            std::vector<int> chain = find_chain(reached, taken, target);
-            if (chain.empty())
-                break;
-
-            for (int channel : chain) {
-                chosen.push_back(channel);
-                taken.at(channel) = true;
-                for (WireId wire : net_desc.reach.at(channel)) {
-                    reached.insert(wire);
-                    uncovered.erase(wire);
-                }
-            }
-        }
-        return chosen;
     }
 
     // Backward search from a sink to the net's existing tree, restricted to
@@ -243,14 +147,12 @@ struct ClockRouterWorker
         }
     }
 
-    void route(NetInfo *net, ClockNetResult &result)
+    void route(NetInfo *net, const std::vector<ClockSink> &sinks, const std::vector<int> &chosen,
+               const pool<WireId> &dropped, ClockNetResult &result)
     {
         WireId src_wire = ctx->getNetinfoSourceWire(net);
         if (src_wire == WireId())
             log_error("net '%s' has no source wire\n", ctx->nameOf(net));
-
-        std::vector<ClockSink> sinks = sinks_of(net);
-        std::vector<int> chosen = select_channels(src_wire, sinks);
 
         pool<PipId> allowed;
         for (int channel : chosen)
@@ -264,7 +166,10 @@ struct ClockRouterWorker
         tree.insert(src_wire);
         std::vector<PipId> pips;
         for (const ClockSink &sink : sinks) {
-            if (!plan_sink(sink.wire, allowed, tree, pips))
+            // A dropped sink is one the assignment could not cover at all;
+            // the rest may still fail here, since reach only says a channel
+            // delivers to a wire, not that a path survives from this source.
+            if (dropped.count(sink.wire) || !plan_sink(sink.wire, allowed, tree, pips))
                 result.unreached_sinks.push_back(sink);
         }
 
@@ -341,10 +246,18 @@ ClockRouteReport route_clock_nets(Context *ctx, const ClockNetwork &network,
     });
 
     ClockRouterWorker worker(ctx, network);
-    for (const ClockCandidate &candidate : ordered) {
+    std::vector<std::vector<ClockSink>> sinks;
+    for (const ClockCandidate &candidate : ordered)
+        sinks.push_back(worker.sinks_of(candidate.net));
+
+    // Every net is assigned in one solve, so a net never takes a channel that
+    // another net needed more.
+    ClockAssignment assignment = assign_clock_channels(ctx, network, ordered, sinks);
+
+    for (size_t i = 0; i < ordered.size(); i++) {
         ClockNetResult result;
-        result.net = candidate.net;
-        worker.route(candidate.net, result);
+        result.net = ordered.at(i).net;
+        worker.route(ordered.at(i).net, sinks.at(i), assignment.channels.at(i), assignment.dropped.at(i), result);
         worker.report.nets.push_back(result);
     }
 

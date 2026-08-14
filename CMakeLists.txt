@@ -257,6 +257,14 @@ add_subdirectory(3rdparty/oourafft)
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/3rdparty/sanitizers-cmake/cmake" ${CMAKE_MODULE_PATH})
 find_package(Sanitizers)
 
+# MIP solver for clock channel assignment. Only the library is wanted; HiGHS
+# builds an executable, tests and a zlib dependency by default.
+set(BUILD_CXX_EXE OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB OFF CACHE BOOL "" FORCE)
+set(HIGHS_NO_DEFAULT_THREADS ON CACHE BOOL "" FORCE)
+add_subdirectory(3rdparty/highs EXCLUDE_FROM_ALL)
+
 if (BUILD_TESTS)
     # Disable unneeded parts
     set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
