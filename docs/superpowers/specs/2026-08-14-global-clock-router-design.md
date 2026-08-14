@@ -206,6 +206,35 @@ adapter.** Parameterising topology as test input rather than writing two test su
 keeps the "one router" claim honest — if a topology-specific branch ever creeps into the
 router, this test is what catches it.
 
+## Implementation status
+
+Built in `common/route/clock_network.{h,cc}` and `common/route/clock_router.{h,cc}`, with tests
+in `generic/tests/clock_router.cc` parameterised over ladder and mesh.
+
+Done:
+
+- The channel model and its derived reach index.
+- Assignment as a minimum channel-set cover, found by breadth-first search over channels. The
+  search handles transit channels — a mesh trunk covers no sink itself — which a
+  coverage-scoring greedy cannot. Ladder and mesh differ only in data.
+- Binding at `STRENGTH_LOCKED`, and the router2 pre-routed contract, confirmed end to end on
+  `4d235150`: router2 leaves the bound tree untouched and completes the remaining sinks.
+- Per-sink granularity: a net whose sinks are not all reachable keeps the network for the ones
+  that are.
+- Diagnostics: status, reason, and the unreached sinks by cell and port.
+
+Not yet built, all of it M4 detail rather than structure:
+
+- **Region budgets.** `ClockChannel::region` is carried but no budget is enforced, so the ISPD
+  rectangle rule is not in the code. The mesh tests pass without ever binding a budget.
+- **Root selection by sink centroid.** Roots are currently whichever the chain search reaches
+  first. The test mesh has symmetric roots, so it cannot tell the two apart.
+- **Discovery from a chipdb.** Channels are hand-constructed by the caller.
+- **Tap-mux reservation** (pipeline step 4). Locked binding already keeps the general router off
+  bound wires; explicit reservation of unused tap muxes only matters once a real fabric puts
+  general pips next to taps, and is untestable before then.
+- **The invocation point**, below.
+
 ## Open questions
 
 - Where the module physically lives, and its invocation point. Not `preRoute()` — that runs
