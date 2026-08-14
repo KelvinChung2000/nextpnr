@@ -30,10 +30,17 @@ byte-identical. This is deliberate: `docs/coding.md:19` states architectures imp
 - High-fanout reset/enable may occupy spare channels.
 - Oversubscription is always diagnosed, never silent.
 
-These are goals of the *design*. Only the ladder is **delivered** by this spec (M1–M2); mesh
-and reset/enable are designed-for and delivered at M3–M4. The test of success is that
-reaching M3–M4 requires no change to the core model or the router2 contract — only new
-channel data and a real set-cover in step 3.
+**Both topologies are committed scope.** The finished router must handle ladder *and* mesh.
+Delivery is staged (ladder first, M1–M2) because it validates the model and the router2
+contract cheaply, but a ladder-only result is not a completed project.
+
+The defining acceptance criterion follows directly:
+
+> The same router binary routes a ladder fabric and a mesh fabric, with **only chipdb data
+> differing** — no recompilation, no topology flag, no branch in the router keyed on
+> topology.
+
+If that fails, the model is wrong, not the fabric.
 
 ## Non-goals
 
@@ -61,8 +68,9 @@ part.
 
 Not skew — resource ownership and structure:
 
-1. **One net should occupy one channel.** router2 routes each sink independently and would
-   consume much of the network for a single clock, defeating the entire point.
+1. **A net should occupy a minimal channel set** (exactly one on a ladder). router2 routes
+   each sink independently and would consume much of the network for a single clock,
+   defeating the entire point.
 2. **Contention is binary.** A channel is owned by exactly one net across its span.
    Negotiated congestion converges badly on hard exclusivity; assignment/colouring is native.
 3. **Two-way exclusion.** Clock pins may be reachable only via tap muxes, and general
@@ -95,6 +103,34 @@ becomes a real optimisation, and the only place an ILP would ever be warranted.
 
 **Topology lives in the data, not the code.** The router asks "which channels reach my
 sinks, and are they free?" — never "am I a ladder or a mesh?"
+
+## Mesh specifics
+
+The ladder exercises steps 1–5 with a trivial cover. The mesh adds three things, and they
+are the only places the two topologies differ — all of them in data or in step 3.
+
+**Tiers.** Following the structure identified in fpga-interchange#34, a channel carries a
+tier: `ROUTE` (source→root), `DISTRIBUTE` (root→region), `LEAF` (within region→taps). A
+ladder declares a single `LEAF`-tier channel per ladder with fabric-wide reach; nothing in
+the router special-cases that.
+
+**Root selection.** A net's root is chosen from the roots its `ROUTE` channels can reach,
+scoring by the sink centroid — pick the legal root minimising total distribution cost to the
+regions containing sinks. Ties break deterministically by region index, never by iteration
+order (the ice40 lesson). Root selection is per-net and made once, before cover.
+
+**Region capacity.** Each region declares a channel budget. We adopt the ISPD 2017 model as
+the default because it is validated and makes our fabrics comparable to published
+benchmarks: a net's regions form a bounding rectangle, and **every region in that rectangle
+consumes a slot even if it holds no sink**. The rectangle rule is a fabric-declared property,
+not a hardcoded assumption — a fabric whose distribution does not work that way declares
+per-region occupancy instead, and only the capacity check changes.
+
+Cover then becomes: choose a root, then select the `DISTRIBUTE`/`LEAF` channels covering all
+sink regions, subject to per-region budgets. Greedy in priority order first. An ILP is
+considered **only if measurement shows greedy failing on realistic fabrics** — the FPGA'16
+SAT result suggests exact methods pay off at commercial scale, but that is not evidence for
+our scale, and Gurobi is available if it becomes warranted.
 
 ## Pipeline
 
@@ -139,14 +175,18 @@ Requirements:
 
 ## Milestones
 
+All four are in scope. Staging is about de-risking order, not about what ships.
+
 | | Scope | Outcome |
 |---|---|---|
 | **M1** | Single channel, ladder | Reproduces today's behaviour; proves plumbing and the router2 pre-routed contract. |
-| **M2** | N channels, ladder | **Multi-domain works. This is the deliverable.** |
-| M3 | Reset/enable eligibility | Spare channels carry high-fanout control. |
-| M4 | Regions / mesh | Set-cover path; ILP considered only if measurement justifies it. |
+| **M2** | N channels, ladder | Multi-domain works. First useful increment. |
+| **M3** | Reset/enable eligibility | Spare channels carry high-fanout control. |
+| **M4** | Regions / mesh | Multi-tier set cover with root selection. **Completes the project.** |
 
-**Deliverable for this spec: M1–M2.** M3–M4 are documented follow-ons.
+M4 is not blocked on FABulous generating a mesh: the discovery adapter is an interface, so
+mesh is developed and tested against a hand-constructed mesh network long before the fabric
+generator can emit one. That decoupling is why mesh can be committed scope now.
 
 ## Testing
 
@@ -160,6 +200,12 @@ cases. Targeted, not coverage-driven. Two assertions matter most:
 Plus: a net assigned to a channel is fully bound src→sink, and router2 subsequently reports
 it as pre-routed rather than rerouting it.
 
+The acceptance criterion gets its own test: **the same test body, run against a ladder
+network and a mesh network, differing only in the channel data handed to the discovery
+adapter.** Parameterising topology as test input rather than writing two test suites is what
+keeps the "one router" claim honest — if a topology-specific branch ever creeps into the
+router, this test is what catches it.
+
 ## Open questions
 
 - Where the module physically lives, and its invocation point. Not `preRoute()` — that runs
@@ -168,4 +214,5 @@ it as pre-routed rather than rerouting it.
   (`common/kernel/command.cc:655-668`), which is a core change. Deferred; the module will be
   self-contained with a clean interface so the call site can move.
 - Ranking policy when a clock and a very high-fanout reset compete for the last channel.
-- Whether the ISPD region-budget model is adopted verbatim at M4.
+- Whether greedy cover suffices at M4, or an ILP is warranted. Deliberately left to
+  measurement rather than decided up front.
