@@ -437,6 +437,16 @@ TEST_P(ClockRouterTest, mixed_sink_net_keeps_the_clock_sinks_on_the_network)
     for (WireId clk : fabric.sinks_of_clock_net(0))
         EXPECT_EQ(ctx->getBoundWireNet(clk), net);
     EXPECT_EQ(ctx->getBoundWireNet(result.unreached_sinks.at(0).wire), nullptr);
+
+    // Two-way exclusion: the clock router binds only pips its channels own,
+    // even where general routing would have reached the sink. This is the trap
+    // for anyone who later widens the set of pips the path search may use.
+    for (const auto &wire : net->wires) {
+        if (wire.second.pip == PipId())
+            continue;
+        EXPECT_EQ(ctx->getPipName(wire.second.pip).str(ctx.get()).rfind("PIP_GENERAL", 0), std::string::npos)
+                << "clock router used a general routing pip";
+    }
 }
 
 TEST_P(ClockRouterTest, assignment_is_deterministic)
