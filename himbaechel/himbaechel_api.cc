@@ -26,7 +26,7 @@
 #include "placer_heap.h"
 #include "router1.h"
 #include "router2.h"
-#include "routerBMSSP.h"
+// #include "routerBMSSP.h" // not available in this build
 #include "util.h"
 
 NEXTPNR_NAMESPACE_BEGIN
@@ -120,7 +120,7 @@ bool HimbaechelAPI::route()
         router2(ctx, Router2Cfg(ctx));
         result = true;
     } else if (router == "router3") {
-        result = routerBMSSP(ctx, RouterBMSSPCfg(ctx));
+        log_error("router3 (BMSSP) not available in this build\n");
     } else {
         log_error("Himbächel architecture does not support router '%s'\n", router.c_str());
     }

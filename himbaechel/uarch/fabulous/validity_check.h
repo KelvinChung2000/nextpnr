@@ -24,6 +24,8 @@
 #include "fab_defs.h"
 #include "sso_array.h"
 
+#include <set>
+
 #include "nextpnr.h"
 
 NEXTPNR_NAMESPACE_BEGIN
